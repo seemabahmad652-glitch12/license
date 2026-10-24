@@ -176,6 +176,44 @@ are sure nothing in there matters:
 ALTER TABLE licenses DROP COLUMN note;
 ```
 
+## Hardware-bound device lock (57th pass)
+
+The device lock used to compare a random UUID the client persisted in
+`device_id.txt`. That was the weak point of the whole scheme: the id
+was not derived from anything, so copying one small text file onto a
+second PC alongside the key gave that PC the same identity, and the
+server - which can only compare what it is sent - had no way to tell
+them apart. One purchased key could be shared indefinitely.
+
+Clients now send a SHA-256 fingerprint of machine-stable values
+(Windows `MachineGuid`, the system volume serial, CPU identifier and
+core count, computer name). Only the digest is sent, so this database
+stores nothing identifying about a customer's hardware.
+
+**Existing customers are migrated, not locked out.** A client that
+still has the old file sends it as `legacy_hwid` alongside the new
+`hwid`; a stored value matching *either* is accepted, and the row is
+then rebound to the new fingerprint. After that one migration the old
+value no longer unlocks anything - verified in testing, including that
+replaying a migrated key's old UUID from a different machine is
+rejected.
+
+Deliberately excluded from the fingerprint: MAC addresses, IP, and
+anything else that legitimately changes on a machine the customer
+still owns (docks, VPNs, Wi-Fi vs ethernet). A fingerprint that drifts
+locks out paying customers, which is a worse failure than a determined
+sharer getting through.
+
+`/verify` also now returns `expires_at` on success, so the desktop app
+can render its own "License time left" readout without a second
+endpoint.
+
+### `note` is now fully removed
+
+Earlier the column was left in place. It is now dropped outright by the
+startup migration (`ALTER TABLE licenses DROP COLUMN IF EXISTS note`).
+**This is irreversible** - any text that was stored there is gone.
+
 ## Deploying on Railway
 
 1. **Push this repo to GitHub** if it isn't already there (Railway

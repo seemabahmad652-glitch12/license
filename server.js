@@ -96,6 +96,11 @@ async function migrate() {
   // issued before this existed is - so the feature arrives switched off
   // for all of them rather than silently expiring anyone.
   await pool.query(`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
+  // `note` removed outright (57th pass) at the owner's request. This is
+  // destructive and irreversible - any text previously stored in that
+  // column is gone the first time this runs. It was already unused by
+  // both the API and the dashboard before this.
+  await pool.query(`ALTER TABLE licenses DROP COLUMN IF EXISTS note;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS licenses_expires_at_idx ON licenses (expires_at);`);
 }
 
@@ -383,10 +388,20 @@ const MAX_FIELD_LEN = 128;
 app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   const key = typeof req.body.key === "string" ? req.body.key.trim() : "";
   const hwid = typeof req.body.hwid === "string" ? req.body.hwid.trim() : "";
+  // The identifier older builds sent - a random UUID persisted in a
+  // file next to the app's other state. The 57th pass replaced that
+  // with a real hardware fingerprint, which means every already-bound
+  // key would otherwise suddenly be "on another device" and every
+  // existing customer would be locked out on upgrade. The client sends
+  // its old id alongside the new one when it has one, and a match on
+  // either is accepted - with the row then rebound to the NEW id, so
+  // each install migrates itself exactly once and the legacy value
+  // stops being accepted from then on.
+  const legacyHwid = typeof req.body.legacy_hwid === "string" ? req.body.legacy_hwid.trim() : "";
   if (!key || !hwid) {
     return res.status(400).json({ success: false, message: "Missing key or hwid." });
   }
-  if (key.length > MAX_FIELD_LEN || hwid.length > MAX_FIELD_LEN) {
+  if (key.length > MAX_FIELD_LEN || hwid.length > MAX_FIELD_LEN || legacyHwid.length > MAX_FIELD_LEN) {
     return res.status(400).json({ success: false, message: "Malformed key or hwid." });
   }
 
@@ -426,11 +441,15 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
        UPDATE licenses l
           SET last_seen_at = now(),
               last_seen_ip = $3,
-              hwid = COALESCE(l.hwid, $2)
+              -- Always the NEW id, not COALESCE: this is both the
+              -- first-time bind and the legacy-to-fingerprint
+              -- migration, and after it the old value no longer
+              -- unlocks anything.
+              hwid = $2
         WHERE l.id = (SELECT id FROM found)
           AND l.status = 'active'
           AND (l.expires_at IS NULL OR l.expires_at > now())
-          AND (l.hwid IS NULL OR l.hwid = $2)
+          AND (l.hwid IS NULL OR l.hwid = $2 OR ($4 <> '' AND l.hwid = $4))
        RETURNING l.id
      )
      SELECT f.status,
@@ -439,7 +458,7 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
             f.expires_at,
             (SELECT count(*) FROM upd)::int AS updated
        FROM found f`,
-    [key, hwid, clientIp(req)]
+    [key, hwid, clientIp(req), legacyHwid]
   );
 
   const license = rows[0];
@@ -474,7 +493,15 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
       message: "This license key is already activated on another device. Contact support to reset it.",
     });
   }
-  return res.json({ success: true, message: "Device unlocked." });
+  // `expires_at` is echoed back so the desktop app can render its own
+  // "time left" readout without a second endpoint - it already calls
+  // this on launch, on Start, and every 5 minutes while running, so the
+  // value is naturally kept fresh. null means the key never expires.
+  return res.json({
+    success: true,
+    message: "Device unlocked.",
+    expires_at: license.expires_at ? new Date(license.expires_at).toISOString() : null,
+  });
 }));
 
 // ---------- Admin routes - never called by the desktop app itself ----------
