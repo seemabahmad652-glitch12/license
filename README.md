@@ -32,6 +32,92 @@ launch - see `updates/README.md` for that (publishing a release, not
 license management, so it's documented on its own over there rather
 than mixed into the table/routes below).
 
+## Live deployment (as of the 55th pass)
+
+This is already deployed - the section below ("Deploying on Railway")
+is the from-scratch procedure and is kept for reference, but you do
+not need to run it again for the existing service.
+
+| | |
+|---|---|
+| Railway project | `lootbloxy` |
+| Service | `license-server` |
+| Environment | `production` |
+| Database | Railway Postgres (`Postgres` service), attached as `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` |
+| Railway URL | `https://license-server-production-c2f5.up.railway.app` |
+| Intended URL | `https://license.lootbloxy.com` (see "Custom domain") |
+| Healthcheck | `/health` (now checks Postgres too, not just "is Node up") |
+
+`CLIENT_SHARED_SECRET` and `ADMIN_SECRET` are set as Railway variables
+on that service. `CLIENT_SHARED_SECRET` is also compiled into the
+desktop app (`src-tauri/src/license.rs`) and the two must stay
+identical - changing one without the other locks every client out with
+"Unauthorized client." `ADMIN_SECRET` is never shipped in the client;
+it is only typed into the admin dashboard or passed to curl.
+
+### Custom domain
+
+The desktop app points at `license.lootbloxy.com`, not the
+`*.up.railway.app` hostname, so that Railway can be swapped out later
+without rebuilding and reshipping the client. The domain is already
+registered on the Railway service; it needs these two DNS records at
+whoever hosts lootbloxy.com's DNS before it will serve traffic:
+
+| Type | Name | Value |
+|---|---|---|
+| CNAME | `license` | `wrcsq3ab.up.railway.app` |
+| TXT | `_railway-verify.license` | `railway-verify=328fbbeed328ad782ec0401d4e5479dbe58225896d7405e973ed01a32e25ec28` |
+
+The TXT record proves ownership so Railway will issue the TLS
+certificate; the CNAME is what actually routes traffic. Until both
+resolve, `https://license.lootbloxy.com/verify` will not answer and
+the app's license gate will fail closed (which is the correct
+behaviour - it is not a bug in the client).
+
+### Redeploying
+
+The service builds from a connected GitHub repository, so shipping a
+change to this folder is `git push` - Railway rebuilds and redeploys on
+its own. No client rebuild is needed for a server-side change, and no
+restart is needed to publish an app update (see `updates/README.md`).
+
+## Hardening applied in the 55th pass
+
+Worth knowing about because two of these change observable behaviour:
+
+- **`X-Forwarded-For` is read from the right-most hop, not the
+  left-most.** This was a real vulnerability, not a preference.
+  `X-Forwarded-For` is a list each proxy *appends* to, so the
+  left-most entry is whatever the caller sent - fully attacker
+  controlled. Every `last_seen_ip` recorded before this change is
+  therefore untrustworthy, and anything keyed off that value would
+  have been trivially bypassable. The right-most entry is the one
+  Railway's own proxy appended. The value is also now normalised to
+  IP-shaped characters and length-capped before being stored.
+- **Rate limiting on `/verify` (30/min/IP) and `/admin/*`
+  (60/min/IP).** There was none before: `ADMIN_SECRET` could be
+  guessed as fast as requests could be sent, and the license keyspace
+  could be walked at full speed. This is an in-process fixed-window
+  counter, not a dependency - **if this service is ever scaled past
+  one replica, it must be replaced with a shared store (Redis), since
+  each replica would otherwise enforce its own window and the
+  effective limit would multiply by the replica count.**
+- **`/verify` is one database round trip instead of two**, and the
+  first-device bind now happens inside the same statement that tests
+  for it. The old SELECT-then-UPDATE had a window where two launches
+  of the same key on two different machines could both observe
+  "unbound" and both bind - handing out two activations for a
+  one-device key.
+- `/health` now fails with 503 if Postgres is unreachable, so it is
+  usable as Railway's healthcheck.
+- Indexes on `status` and `created_at` for the dashboard's own
+  queries; bounded connection pool with explicit timeouts; a 4kb body
+  limit and length caps on `key`/`hwid`; `X-Frame-Options: DENY`,
+  `nosniff` and `no-referrer` on responses; `no-store` on
+  `updates/latest.json` and long immutable caching on the installers
+  beside it; and SIGTERM handling so a redeploy drains in-flight
+  requests instead of severing them.
+
 ## Deploying on Railway
 
 1. **Push this repo to GitHub** if it isn't already there (Railway

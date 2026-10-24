@@ -49,6 +49,16 @@ for (const [name, value] of [
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
+  // Bounded pool + explicit timeouts. Without these, a Postgres that
+  // goes slow (or away) during a redeploy leaves requests hanging on
+  // `pool.query` with no ceiling, and every hung request holds a
+  // connection - which is how one bad minute turns into a pool that
+  // never recovers. `statement_timeout` is enforced by Postgres itself,
+  // so even a query that somehow blocks server-side gets killed.
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  statement_timeout: 10_000,
   // Railway's managed Postgres is reachable over TLS but with a
   // certificate chain `pg`'s default strict verification doesn't
   // always resolve cleanly from inside their own network - this is
@@ -70,6 +80,14 @@ async function migrate() {
       last_seen_ip TEXT
     );
   `);
+  // `license_key` already has an index (the UNIQUE constraint builds
+  // one), which is what /verify looks up by - these two are for the
+  // admin dashboard's own queries, which had no index behind them at
+  // all: the status filter / stats grouping, and the unfiltered list's
+  // `ORDER BY created_at DESC` (a sequential scan plus a sort on every
+  // page load once the table is more than a few hundred rows).
+  await pool.query(`CREATE INDEX IF NOT EXISTS licenses_status_idx ON licenses (status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS licenses_created_at_idx ON licenses (created_at DESC);`);
 }
 
 // Constant-time-ish string comparison via fixed-length digests, so two
@@ -100,20 +118,128 @@ function generateLicenseKey() {
   return groups.join("-");
 }
 
+/// Railway (like most PaaS) terminates TLS in front of the app and
+/// forwards the client IP via X-Forwarded-For, so `req.ip` on its own
+/// is just Railway's internal proxy address.
+///
+/// This used to take the LEFT-most entry, which is a real
+/// vulnerability, not a style choice: X-Forwarded-For is a list that
+/// each hop *appends* to, so the left-most entry is whatever the
+/// caller sent - a header they control completely. Anyone could put
+/// `1.2.3.4` (or any string at all) there and that is what landed in
+/// `last_seen_ip`, and it would equally have defeated anything keyed
+/// off this value, rate limiting included. The RIGHT-most entry is the
+/// one Railway's own proxy appended, which is the only hop in that
+/// list this process has any reason to believe.
+///
+/// Also normalised and length-capped: this value is persisted and
+/// later rendered in the admin dashboard, so it should only ever be
+/// IP-shaped characters, never arbitrary header bytes.
 function clientIp(req) {
-  // Railway (like most PaaS) terminates TLS in front of the app and
-  // forwards the real client IP via X-Forwarded-For - req.ip alone
-  // would just be Railway's internal proxy address otherwise. Takes
-  // the first (left-most, client-supplied-closest-to-origin) entry.
   const xff = req.headers["x-forwarded-for"];
+  let ip = req.ip;
   if (typeof xff === "string" && xff.length > 0) {
-    return xff.split(",")[0].trim();
+    const hops = xff.split(",");
+    ip = hops[hops.length - 1].trim();
   }
-  return req.ip;
+  return String(ip || "").replace(/[^0-9a-fA-F.:\[\]]/g, "").slice(0, 45) || null;
 }
 
+// ---------- Rate limiting ----------
+//
+// There was none at all before this, on either endpoint that matters:
+// `/admin/*` accepted one ADMIN_SECRET guess per request as fast as
+// anyone cared to send them, and `/verify` let anyone walk the license
+// keyspace at full line rate. Both are the kind of thing you only get
+// to notice once.
+//
+// Deliberately a small in-process fixed-window counter rather than a
+// dependency: this runs as a single Railway instance, the whole state
+// is a Map of counters, and adding `express-rate-limit` + a Redis to
+// share state across replicas would be a much bigger change than the
+// problem warrants. If this service is ever scaled past one replica,
+// that is the point to swap this for a shared store - each replica
+// enforcing its own window means the effective limit multiplies by the
+// replica count.
+const rateBuckets = new Map();
+
+function rateLimit({ windowMs, max, keyOf, message }) {
+  return (req, res, next) => {
+    const key = keyOf(req);
+    // No usable key (no IP at all) - fail closed rather than handing
+    // out an unlimited lane to anything that manages to hide itself.
+    if (!key) return res.status(429).json({ error: message });
+
+    const now = Date.now();
+    let bucket = rateBuckets.get(key);
+    if (!bucket || now >= bucket.resetAt) {
+      bucket = { count: 0, resetAt: now + windowMs };
+      rateBuckets.set(key, bucket);
+    }
+    bucket.count += 1;
+    if (bucket.count > max) {
+      res.setHeader("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
+      return res.status(429).json({ success: false, error: message, message });
+    }
+    next();
+  };
+}
+
+// Sweeps expired buckets so a long-running process doesn't accumulate
+// one Map entry per IP that has ever called this, forever. `unref()` so
+// this timer can never be the thing keeping the process alive during a
+// shutdown.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of rateBuckets) {
+    if (now >= bucket.resetAt) rateBuckets.delete(key);
+  }
+}, 60_000).unref();
+
+// Generous enough that a real client never notices: the desktop app
+// calls /verify on launch, on Start, and once every 5 minutes while
+// running (see poller.rs's LICENSE_RECHECK_SECS), so even several
+// installs behind one household NAT sit far under this - while a
+// keyspace walk from one address gets cut off almost immediately.
+const verifyLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 30,
+  keyOf: (req) => `verify:${clientIp(req)}`,
+  message: "Too many license checks from this address - wait a minute and try again.",
+});
+
+// Much tighter, because the thing being guessed here is a single
+// long-lived secret: 10 attempts a minute makes brute force hopeless
+// while leaving the dashboard (which fires a handful of calls per page
+// load) comfortable.
+const adminLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 60,
+  keyOf: (req) => `admin:${clientIp(req)}`,
+  message: "Too many admin requests from this address - wait a minute and try again.",
+});
+
 const app = express();
-app.use(express.json());
+
+// Express advertises itself in a response header by default; there is
+// no reason to tell the internet what this is running on.
+app.disable("x-powered-by");
+
+// `express.json()`'s own default limit is 100kb, which is already far
+// more than {key, hwid} needs - tightened to 4kb so an oversized body
+// is rejected before it is parsed and buffered at all.
+app.use(express.json({ limit: "4kb" }));
+
+// The admin dashboard is the only HTML this serves, and it holds the
+// admin secret in sessionStorage - so it should not be framable by
+// anyone else's page, should not sniff content types, and should not
+// leak its URL as a referrer to third parties.
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
 
 // Serves public/index.html (the admin dashboard) and nothing else -
 // this directory has exactly one file in it. express.static calls
@@ -134,7 +260,24 @@ app.use(express.static(path.join(__dirname, "public")));
 // See license-server/updates/README.md for the manifest format and
 // how to sign a release; see the main README's "Auto-updates" section
 // for how the desktop side consumes it.
-app.use("/updates", express.static(path.join(__dirname, "updates")));
+app.use(
+  "/updates",
+  express.static(path.join(__dirname, "updates"), {
+    // The manifest must never be cached - it is the one file whose
+    // whole job is to change when a release ships, and a CDN or
+    // webview holding a stale copy is exactly how "I published an
+    // update and nobody got it" happens. The installers it points at
+    // are the opposite: their URLs carry the version, so once
+    // published they never change and can be cached hard.
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith("latest.json")) {
+        res.setHeader("Cache-Control", "no-store");
+      } else {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    },
+  })
+);
 
 // Express 4 (unlike 5) does NOT automatically catch a rejected promise
 // from an async route handler - an unhandled rejection in one of the
@@ -144,8 +287,19 @@ app.use("/updates", express.static(path.join(__dirname, "updates")));
 // a thrown/rejected error always becomes a real `next(err)` call.
 const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok" });
+// Reports "ok" only if Postgres actually answers - a healthcheck that
+// just proves the Node process is up would report healthy during
+// exactly the outage worth catching (database unreachable, every
+// /verify failing), which is also what makes it useless as Railway's
+// configured healthcheck path.
+app.get("/health", async (_req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    res.json({ status: "ok", database: "ok" });
+  } catch (e) {
+    console.error("Healthcheck failed - database unreachable:", e);
+    res.status(503).json({ status: "degraded", database: "unreachable" });
+  }
 });
 
 function requireClientSecret(req, res, next) {
@@ -174,17 +328,77 @@ function requireAdminSecret(req, res, next) {
 // client can't just claim a different hwid to get a second activation,
 // because THIS check is what decides, not anything the client sends
 // about its own state.
-app.post("/verify", requireClientSecret, ah(async (req, res) => {
+// Longest value either field can legitimately be: a license key is 23
+// characters (four groups of five plus three hyphens) and a hwid is a
+// 36-character UUID (see license.rs's `device_id`). Capped generously
+// rather than exactly, but capped - without this, a multi-kilobyte
+// "key" was handed straight to Postgres as a query parameter on an
+// unauthenticated-by-anything-but-a-shared-secret endpoint.
+const MAX_FIELD_LEN = 128;
+
+// The rate limiter runs BEFORE requireClientSecret on purpose: an
+// attacker without the client secret should be throttled too, and
+// putting the cheap counter first also means a flood never reaches the
+// sha256 work requireClientSecret does per request.
+app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   const key = typeof req.body.key === "string" ? req.body.key.trim() : "";
   const hwid = typeof req.body.hwid === "string" ? req.body.hwid.trim() : "";
   if (!key || !hwid) {
     return res.status(400).json({ success: false, message: "Missing key or hwid." });
   }
+  if (key.length > MAX_FIELD_LEN || hwid.length > MAX_FIELD_LEN) {
+    return res.status(400).json({ success: false, message: "Malformed key or hwid." });
+  }
 
+  // One round trip instead of the SELECT-then-UPDATE this used to do.
+  // /verify is the hottest endpoint this service has (every launch,
+  // every Start, and every 5 minutes for every running install), and
+  // the old shape paid two sequential network hops to Postgres for
+  // every single call - with a race in the gap between them, where two
+  // launches of the same key on two different devices could both read
+  // `hwid IS NULL` and both then bind, handing out two activations for
+  // a one-device key.
+  //
+  // This does the whole decision in a single statement:
+  //   - `found`  reads the license's pre-update state, so the response
+  //              can still say *why* a check failed.
+  //   - `upd`    applies the update only when the license is active AND
+  //              the device either matches or isn't bound yet. The
+  //              `COALESCE(l.hwid, $2)` is the first-device bind.
+  //
+  // Note that `upd`'s guard tests `l.status`/`l.hwid` - the live row -
+  // and NOT the values `found` read, even though `found` has them
+  // sitting right there. That is the whole race fix and it is subtle:
+  // under READ COMMITTED, when two concurrent binds collide, the
+  // second UPDATE blocks on the first's row lock and then re-evaluates
+  // its WHERE clause against the *updated* tuple. That re-check only
+  // re-reads columns of the target row; a value already materialised
+  // in a CTE is from the original snapshot and would still say
+  // "unbound", so gating on `(SELECT hwid FROM found)` would let the
+  // second device bind straight over the first. `found` is therefore
+  // used for one thing only: knowing which message to return.
+  // `updated = 0` with a row present therefore means "the key exists
+  // and is active, but this is the wrong device".
   const { rows } = await pool.query(
-    "SELECT id, hwid, status FROM licenses WHERE license_key = $1",
-    [key]
+    `WITH found AS (
+       SELECT id, hwid, status FROM licenses WHERE license_key = $1
+     ), upd AS (
+       UPDATE licenses l
+          SET last_seen_at = now(),
+              last_seen_ip = $3,
+              hwid = COALESCE(l.hwid, $2)
+        WHERE l.id = (SELECT id FROM found)
+          AND l.status = 'active'
+          AND (l.hwid IS NULL OR l.hwid = $2)
+       RETURNING l.id
+     )
+     SELECT f.status,
+            (f.hwid IS NULL) AS was_unbound,
+            (SELECT count(*) FROM upd)::int AS updated
+       FROM found f`,
+    [key, hwid, clientIp(req)]
   );
+
   const license = rows[0];
   if (!license) {
     return res.json({ success: false, message: "Invalid license key." });
@@ -195,28 +409,16 @@ app.post("/verify", requireClientSecret, ah(async (req, res) => {
   if (license.status === "banned") {
     return res.json({ success: false, message: "This license key has been banned." });
   }
-
-  if (!license.hwid) {
-    // First-ever successful check for this key - bind it to this
-    // device from now on.
-    await pool.query(
-      "UPDATE licenses SET hwid = $1, last_seen_at = now(), last_seen_ip = $2 WHERE id = $3",
-      [hwid, clientIp(req), license.id]
-    );
-    return res.json({ success: true, message: "Device unlocked." });
-  }
-
-  if (!safeEqual(license.hwid, hwid)) {
+  if (license.updated === 0) {
+    // Active key, but bound to a different device - the "device
+    // locked" rejection. Note this is decided here, server-side,
+    // against this server's own database: nothing the client sends
+    // about its own state can talk its way past it.
     return res.json({
       success: false,
       message: "This license key is already activated on another device. Contact support to reset it.",
     });
   }
-
-  await pool.query(
-    "UPDATE licenses SET last_seen_at = now(), last_seen_ip = $1 WHERE id = $2",
-    [clientIp(req), license.id]
-  );
   return res.json({ success: true, message: "Device unlocked." });
 }));
 
@@ -225,7 +427,7 @@ app.post("/verify", requireClientSecret, ah(async (req, res) => {
 // own backend after a sale goes through - not meant to be exposed to
 // customers directly. All require X-Admin-Secret.
 
-app.post("/admin/licenses", requireAdminSecret, ah(async (req, res) => {
+app.post("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const note = typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null;
   // Collisions are astronomically unlikely (32^20 keyspace) but checked
   // and retried anyway rather than trusting that away - a crash here
@@ -254,7 +456,7 @@ app.post("/admin/licenses", requireAdminSecret, ah(async (req, res) => {
 // required, so every existing curl/script call to this route (bare
 // ?limit&offset) keeps working unchanged.
 const LICENSE_STATUSES = ["active", "revoked", "banned"];
-app.get("/admin/licenses", requireAdminSecret, ah(async (req, res) => {
+app.get("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 1000);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
   const status = LICENSE_STATUSES.includes(req.query.status) ? req.query.status : null;
@@ -287,7 +489,7 @@ app.get("/admin/licenses", requireAdminSecret, ah(async (req, res) => {
 // Summary counts for the dashboard's stat cards - one grouped query
 // rather than making the dashboard fetch every page just to count
 // them itself.
-app.get("/admin/stats", requireAdminSecret, ah(async (req, res) => {
+app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT status, COUNT(*)::int AS count, COUNT(hwid)::int AS bound FROM licenses GROUP BY status`
   );
@@ -302,7 +504,7 @@ app.get("/admin/stats", requireAdminSecret, ah(async (req, res) => {
   res.json({ total, bound, unbound: total - bound, byStatus });
 }));
 
-app.post("/admin/licenses/:key/revoke", requireAdminSecret, ah(async (req, res) => {
+app.post("/admin/licenses/:key/revoke", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const { rowCount } = await pool.query(
     "UPDATE licenses SET status = 'revoked' WHERE license_key = $1",
     [req.params.key]
@@ -311,7 +513,7 @@ app.post("/admin/licenses/:key/revoke", requireAdminSecret, ah(async (req, res) 
   res.json({ ok: true });
 }));
 
-app.post("/admin/licenses/:key/unrevoke", requireAdminSecret, ah(async (req, res) => {
+app.post("/admin/licenses/:key/unrevoke", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const { rowCount } = await pool.query(
     "UPDATE licenses SET status = 'active' WHERE license_key = $1",
     [req.params.key]
@@ -327,7 +529,7 @@ app.post("/admin/licenses/:key/unrevoke", requireAdminSecret, ah(async (req, res
 // Nothing server-side actually treats the two differently beyond that
 // message - split them if that ever needs to change (e.g. banned keys
 // also blocking that hwid account-wide).
-app.post("/admin/licenses/:key/ban", requireAdminSecret, ah(async (req, res) => {
+app.post("/admin/licenses/:key/ban", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const { rowCount } = await pool.query(
     "UPDATE licenses SET status = 'banned' WHERE license_key = $1",
     [req.params.key]
@@ -341,7 +543,7 @@ app.post("/admin/licenses/:key/ban", requireAdminSecret, ah(async (req, res) => 
 // key, so the two button labels ("Unrevoke" vs "Unban") each have a
 // matching, equally-named endpoint instead of one hiding behind the
 // other's name.
-app.post("/admin/licenses/:key/unban", requireAdminSecret, ah(async (req, res) => {
+app.post("/admin/licenses/:key/unban", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const { rowCount } = await pool.query(
     "UPDATE licenses SET status = 'active' WHERE license_key = $1",
     [req.params.key]
@@ -350,7 +552,7 @@ app.post("/admin/licenses/:key/unban", requireAdminSecret, ah(async (req, res) =
   res.json({ ok: true });
 }));
 
-app.post("/admin/licenses/:key/reset-hwid", requireAdminSecret, ah(async (req, res) => {
+app.post("/admin/licenses/:key/reset-hwid", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   // Lets a customer move a key to a new/replacement device - without
   // this there would be no legitimate way back in after a reinstall or
   // a new PC, short of you editing the database by hand.
@@ -362,7 +564,7 @@ app.post("/admin/licenses/:key/reset-hwid", requireAdminSecret, ah(async (req, r
   res.json({ ok: true });
 }));
 
-app.delete("/admin/licenses/:key", requireAdminSecret, ah(async (req, res) => {
+app.delete("/admin/licenses/:key", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const { rowCount } = await pool.query(
     "DELETE FROM licenses WHERE license_key = $1",
     [req.params.key]
@@ -381,9 +583,33 @@ app.use((err, _req, res, _next) => {
 
 migrate()
   .then(() => {
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       console.log(`afkstrike license server listening on :${PORT}`);
     });
+
+    // Railway sends SIGTERM and then kills the container shortly
+    // after, on every redeploy. Without handling it, in-flight
+    // requests are severed mid-response and Postgres connections are
+    // dropped rather than closed - so each deploy showed up as a
+    // handful of client-side errors (a desktop app's /verify failing
+    // closed, which is a locked-out user) for no reason. Finish what
+    // is in flight, close the pool, then exit.
+    const shutdown = (signal) => {
+      console.log(`${signal} received - shutting down.`);
+      server.close(async () => {
+        try {
+          await pool.end();
+        } catch (e) {
+          console.error("Error closing the database pool:", e);
+        }
+        process.exit(0);
+      });
+      // Backstop: if something refuses to let go, don't hang until the
+      // platform SIGKILLs us anyway.
+      setTimeout(() => process.exit(0), 10_000).unref();
+    };
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
   })
   .catch((e) => {
     console.error("Failed to run startup migration:", e);

@@ -515,7 +515,12 @@ function rowHtml(row) {
     ? `<span class="hwid-cell bound" title="${escapeHtml(row.hwid)}">${escapeHtml(row.hwid.slice(0, 8))}&hellip;</span>`
     : `<span class="hwid-cell">unbound</span>`;
 
-  const key = row.license_key;
+  // Escaped even though a license_key is server-generated from a fixed
+  // A-Z/2-9 alphabet and so cannot currently contain markup - this is
+  // the one value on the row that was being interpolated raw, and
+  // "the generator can't produce anything dangerous" is a property of
+  // code elsewhere, not of this template. Cheap to not depend on it.
+  const key = escapeHtml(row.license_key);
   const revokeBtn = row.status === "revoked"
     ? `<button data-action="unrevoke" data-key="${key}">Unrevoke</button>`
     : `<button data-action="revoke" data-key="${key}">Revoke</button>`;
