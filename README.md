@@ -118,6 +118,64 @@ Worth knowing about because two of these change observable behaviour:
   beside it; and SIGTERM handling so a redeploy drains in-flight
   requests instead of severing them.
 
+## Key expiry (56th pass)
+
+Keys can now carry an optional expiry. `expires_at IS NULL` means
+"never expires", which is what every key issued before this feature
+existed is - so it arrived switched off for all of them rather than
+silently expiring anyone.
+
+Expiry is **orthogonal to `status`**: a key can be `active` and expired
+at the same time. That is deliberate - it keeps "I revoked this" and
+"this lapsed" as separate facts you can tell apart later. The dashboard
+shows both (an `Active` pill next to an `Expired` pill), and its status
+filter offers `expired` as a pseudo-status that filters on the
+timestamp rather than the `status` column.
+
+Enforcement lives in `/verify`'s own UPDATE guard
+(`AND (l.expires_at IS NULL OR l.expires_at > now())`), not in a
+separate check afterwards. That matters: an expired key never reaches
+the bind, so it can neither claim a new device nor refresh
+`last_seen_at` - it is rejected before touching anything.
+
+Setting an expiry, on create or afterwards, takes either
+`expires_in_days` or `expires_at` (ISO timestamp):
+
+```bash
+# a key valid for 30 days
+curl -X POST "$BASE/admin/licenses" \
+  -H "X-Admin-Secret: $ADMIN_SECRET" -H 'Content-Type: application/json' \
+  -d '{"expires_in_days":30}'
+
+# extend (or set) an existing key's expiry
+curl -X POST "$BASE/admin/licenses/XXXXX-XXXXX-XXXXX-XXXXX/expiry" \
+  -H "X-Admin-Secret: $ADMIN_SECRET" -H 'Content-Type: application/json' \
+  -d '{"expires_in_days":365}'
+
+# remove the expiry entirely (back to "never expires")
+curl -X POST "$BASE/admin/licenses/XXXXX-XXXXX-XXXXX-XXXXX/expiry" \
+  -H "X-Admin-Secret: $ADMIN_SECRET" -H 'Content-Type: application/json' \
+  -d '{"expires_in_days":0}'
+```
+
+`0` days means "no expiry" rather than "expires immediately" - issuing
+a dead key by accident should not be one keystroke away.
+
+### `note` was removed
+
+The `note` field is gone from this API and from the dashboard: create
+no longer accepts it, the list no longer returns it, and `?q=` now
+searches the key only.
+
+**The database column is deliberately still there.** Dropping it would
+irreversibly destroy any notes already stored, so that is left as a
+decision for you rather than something a deploy did silently. Once you
+are sure nothing in there matters:
+
+```sql
+ALTER TABLE licenses DROP COLUMN note;
+```
+
 ## Deploying on Railway
 
 1. **Push this repo to GitHub** if it isn't already there (Railway

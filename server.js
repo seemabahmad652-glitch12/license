@@ -88,6 +88,46 @@ async function migrate() {
   // page load once the table is more than a few hundred rows).
   await pool.query(`CREATE INDEX IF NOT EXISTS licenses_status_idx ON licenses (status);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS licenses_created_at_idx ON licenses (created_at DESC);`);
+
+  // Key expiry (56th pass). Added as a nullable column via ALTER rather
+  // than being folded into the CREATE TABLE above, so an existing
+  // deployment picks it up on its next boot without losing the keys it
+  // already has. NULL means "never expires", which is what every key
+  // issued before this existed is - so the feature arrives switched off
+  // for all of them rather than silently expiring anyone.
+  await pool.query(`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS licenses_expires_at_idx ON licenses (expires_at);`);
+}
+
+/// Resolves the expiry an admin request is asking for into either a
+/// Date, null ("never expires"), or an error string.
+///
+/// Accepts `expires_in_days` (a number - what the dashboard's duration
+/// picker sends) or `expires_at` (an ISO timestamp, for anything
+/// scripting this directly). Absent/null/0 days means no expiry.
+function resolveExpiry(body) {
+  if (!body || typeof body !== "object") return { value: null };
+
+  if (body.expires_at !== undefined && body.expires_at !== null && body.expires_at !== "") {
+    const when = new Date(body.expires_at);
+    if (Number.isNaN(when.getTime())) return { error: "expires_at isn't a valid date." };
+    return { value: when };
+  }
+
+  if (body.expires_in_days !== undefined && body.expires_in_days !== null && body.expires_in_days !== "") {
+    const days = Number(body.expires_in_days);
+    if (!Number.isFinite(days) || days < 0) {
+      return { error: "expires_in_days must be a non-negative number." };
+    }
+    // 0 is an explicit "no expiry" rather than "expires immediately",
+    // which would otherwise be an easy way to issue a dead key by
+    // accident.
+    if (days === 0) return { value: null };
+    if (days > 3650) return { error: "expires_in_days is more than 10 years - that's probably a typo." };
+    return { value: new Date(Date.now() + days * 24 * 60 * 60 * 1000) };
+  }
+
+  return { value: null };
 }
 
 // Constant-time-ish string comparison via fixed-length digests, so two
@@ -381,7 +421,7 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   // and is active, but this is the wrong device".
   const { rows } = await pool.query(
     `WITH found AS (
-       SELECT id, hwid, status FROM licenses WHERE license_key = $1
+       SELECT id, hwid, status, expires_at FROM licenses WHERE license_key = $1
      ), upd AS (
        UPDATE licenses l
           SET last_seen_at = now(),
@@ -389,11 +429,14 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
               hwid = COALESCE(l.hwid, $2)
         WHERE l.id = (SELECT id FROM found)
           AND l.status = 'active'
+          AND (l.expires_at IS NULL OR l.expires_at > now())
           AND (l.hwid IS NULL OR l.hwid = $2)
        RETURNING l.id
      )
      SELECT f.status,
             (f.hwid IS NULL) AS was_unbound,
+            (f.expires_at IS NOT NULL AND f.expires_at <= now()) AS is_expired,
+            f.expires_at,
             (SELECT count(*) FROM upd)::int AS updated
        FROM found f`,
     [key, hwid, clientIp(req)]
@@ -408,6 +451,18 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   }
   if (license.status === "banned") {
     return res.json({ success: false, message: "This license key has been banned." });
+  }
+  // Checked before the device branch below, because an expired key that
+  // also happens to be on the wrong device should say it expired - that
+  // is the thing the person has to act on, and "already activated on
+  // another device" would send them to support for the wrong reason.
+  //
+  // Note the expiry is enforced by the UPDATE's own guard above, not by
+  // this branch: an expired key never reaches the bind, so it can
+  // neither claim a new device nor refresh last_seen_at. This branch
+  // only decides what to *tell* the client.
+  if (license.is_expired) {
+    return res.json({ success: false, message: "This license key has expired." });
   }
   if (license.updated === 0) {
     // Active key, but bound to a different device - the "device
@@ -427,8 +482,15 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
 // own backend after a sale goes through - not meant to be exposed to
 // customers directly. All require X-Admin-Secret.
 
+// `note` was removed from this API in the 56th pass - it was never
+// used in practice and the dashboard no longer shows it. The database
+// column is deliberately left in place rather than dropped: dropping
+// it would irreversibly destroy any notes already stored. To actually
+// remove it, run `ALTER TABLE licenses DROP COLUMN note;` by hand once
+// you are sure nothing in there matters.
 app.post("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res) => {
-  const note = typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null;
+  const expiry = resolveExpiry(req.body);
+  if (expiry.error) return res.status(400).json({ error: expiry.error });
   // Collisions are astronomically unlikely (32^20 keyspace) but checked
   // and retried anyway rather than trusting that away - a crash here
   // would be a strange way to fail to sell a key.
@@ -436,8 +498,9 @@ app.post("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res
     const key = generateLicenseKey();
     try {
       const { rows } = await pool.query(
-        "INSERT INTO licenses (license_key, note) VALUES ($1, $2) RETURNING id, license_key, status, note, created_at",
-        [key, note]
+        `INSERT INTO licenses (license_key, expires_at) VALUES ($1, $2)
+         RETURNING id, license_key, status, created_at, expires_at`,
+        [key, expiry.value]
       );
       return res.status(201).json(rows[0]);
     } catch (e) {
@@ -464,13 +527,21 @@ app.get("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res)
 
   const conditions = [];
   const params = [];
-  if (status) {
+  // "expired" is offered as a pseudo-status in the dashboard's filter
+  // because that is how a person thinks about it, but it is not a value
+  // of the `status` column - expiry is orthogonal to active/revoked/
+  // banned (a key can be active AND expired). So it filters on the
+  // timestamp instead.
+  if (req.query.status === "expired") {
+    conditions.push(`expires_at IS NOT NULL AND expires_at <= now()`);
+  } else if (status) {
     params.push(status);
     conditions.push(`status = $${params.length}`);
   }
   if (q) {
+    // Key only now that `note` is gone from this API.
     params.push(`%${q}%`);
-    conditions.push(`(license_key ILIKE $${params.length} OR note ILIKE $${params.length})`);
+    conditions.push(`license_key ILIKE $${params.length}`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   params.push(limit);
@@ -479,7 +550,7 @@ app.get("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res)
   const offsetPlaceholder = `$${params.length}`;
 
   const { rows } = await pool.query(
-    `SELECT id, license_key, hwid, status, note, created_at, last_seen_at, last_seen_ip
+    `SELECT id, license_key, hwid, status, created_at, expires_at, last_seen_at, last_seen_ip
      FROM licenses ${where} ORDER BY created_at DESC LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
     params
   );
@@ -491,17 +562,27 @@ app.get("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res)
 // them itself.
 app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT status, COUNT(*)::int AS count, COUNT(hwid)::int AS bound FROM licenses GROUP BY status`
+    `SELECT status,
+            COUNT(*)::int AS count,
+            COUNT(hwid)::int AS bound,
+            (COUNT(*) FILTER (WHERE expires_at IS NOT NULL AND expires_at <= now()))::int AS expired
+       FROM licenses
+      GROUP BY status`
   );
   const byStatus = { active: 0, revoked: 0, banned: 0 };
   let total = 0;
   let bound = 0;
+  let expired = 0;
   for (const row of rows) {
     byStatus[row.status] = row.count;
     total += row.count;
     bound += row.bound;
+    expired += row.expired;
   }
-  res.json({ total, bound, unbound: total - bound, byStatus });
+  // `expired` deliberately overlaps the byStatus counts rather than
+  // being a fourth bucket - a key can be active and expired at once,
+  // and the dashboard needs to show both facts.
+  res.json({ total, bound, unbound: total - bound, expired, byStatus });
 }));
 
 app.post("/admin/licenses/:key/revoke", adminLimiter, requireAdminSecret, ah(async (req, res) => {
@@ -550,6 +631,23 @@ app.post("/admin/licenses/:key/unban", adminLimiter, requireAdminSecret, ah(asyn
   );
   if (rowCount === 0) return res.status(404).json({ error: "No license with that key." });
   res.json({ ok: true });
+}));
+
+// Sets or clears one key's expiry after the fact - renewing a key
+// someone re-bought, extending a trial, or taking the expiry off
+// entirely. Body is the same shape `POST /admin/licenses` accepts
+// (`expires_in_days` or `expires_at`); send neither, or 0 days, to
+// clear it back to "never expires".
+app.post("/admin/licenses/:key/expiry", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+  const expiry = resolveExpiry(req.body);
+  if (expiry.error) return res.status(400).json({ error: expiry.error });
+
+  const { rows } = await pool.query(
+    "UPDATE licenses SET expires_at = $1 WHERE license_key = $2 RETURNING license_key, expires_at",
+    [expiry.value, req.params.key]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: "No license with that key." });
+  res.json({ ok: true, expires_at: rows[0].expires_at });
 }));
 
 app.post("/admin/licenses/:key/reset-hwid", adminLimiter, requireAdminSecret, ah(async (req, res) => {

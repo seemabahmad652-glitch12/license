@@ -13,6 +13,12 @@
 
   Nothing here is sensitive to serve statically: without the real
   secret every API call just gets a 401, same as a guess over curl.
+
+  56th pass: restyled (deeper surfaces, a wider radius scale, tabular
+  figures), the Note column removed, key expiry added, and the status
+  dropdown fixed - it rendered as a white OS-default list on a dark
+  page because nothing told the browser this page is dark. See the
+  `color-scheme` note on the select rule below.
 -->
 <html lang="en">
 <head>
@@ -21,225 +27,360 @@
 <title>AfkStrike - License Admin</title>
 <style>
   :root {
-    --bg: #0c0914;
-    --bg-soft: #130f20;
-    --panel: rgba(255, 255, 255, 0.04);
-    --panel-border: rgba(255, 255, 255, 0.08);
-    --panel-strong: rgba(255, 255, 255, 0.07);
-    --text: #f2eefb;
-    --text-dim: #a79cc4;
-    --text-faint: #6f6485;
+    /* Real surface colours rather than the previous stack of
+       translucent whites over a gradient - layering rgba(255,255,255,
+       0.04) three deep made every panel edge a slightly different
+       muddy grey depending on what was behind it. */
+    --bg: #0b0a12;
+    --surface: #15131f;
+    --surface-2: #1d1a2b;
+    --surface-3: #241f36;
+    --line: #2a2640;
+    --line-soft: #211d33;
+
+    --text: #f4f1fb;
+    --dim: #a49bbf;
+    --faint: #6f6788;
+
     --accent: #a855f7;
     --accent-2: #7c3aed;
-    --accent-soft: rgba(168, 85, 247, 0.16);
-    --ok: #34d399;
-    --ok-soft: rgba(52, 211, 153, 0.14);
-    --warn: #fbbf24;
-    --warn-soft: rgba(251, 191, 36, 0.14);
-    --bad: #f87171;
-    --bad-soft: rgba(248, 113, 113, 0.14);
-    --radius: 14px;
+    --accent-soft: rgba(168, 85, 247, 0.14);
+
+    --ok: #3ddc97;
+    --ok-soft: rgba(61, 220, 151, 0.13);
+    --warn: #f5b544;
+    --warn-soft: rgba(245, 181, 68, 0.13);
+    --bad: #ff6b6b;
+    --bad-soft: rgba(255, 107, 107, 0.13);
+    /* Expiry is a lapse, not a punishment - it reads grey rather than
+       red so it is visually distinct from a ban at a glance. */
+    --lapsed: #8b8398;
+    --lapsed-soft: rgba(139, 131, 152, 0.15);
+
+    --r-lg: 20px;
+    --r-md: 14px;
+    --r-sm: 10px;
     --ease: cubic-bezier(0.16, 1, 0.3, 1);
+
     font-family: -apple-system, "Segoe UI", Inter, Roboto, system-ui, sans-serif;
+
+    /* The actual fix for the white dropdown. A native <select>'s popup
+       list is drawn by the OS, not the page, so no amount of CSS on the
+       element itself affects it - it stayed light-on-white over this
+       dark page. `color-scheme: dark` is what tells the browser to draw
+       its built-in widgets (that popup, scrollbars, focus rings, date
+       pickers) in their dark variants. Set at the root so every control
+       on the page inherits it. */
+    color-scheme: dark;
   }
 
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
     background:
-      radial-gradient(900px 500px at 15% -10%, rgba(124, 58, 237, 0.25), transparent 60%),
-      radial-gradient(700px 500px at 110% 10%, rgba(168, 85, 247, 0.14), transparent 55%),
+      radial-gradient(1100px 600px at 12% -15%, rgba(124, 58, 237, 0.18), transparent 62%),
+      radial-gradient(800px 500px at 108% 4%, rgba(168, 85, 247, 0.10), transparent 58%),
       var(--bg);
     color: var(--text);
     min-height: 100%;
     -webkit-font-smoothing: antialiased;
+    font-size: 14px;
+    line-height: 1.5;
   }
 
   a { color: var(--accent); }
+  code { font-family: "SF Mono", ui-monospace, Consolas, monospace; font-size: 0.92em; }
+
+  /* Every figure and timestamp on this page sits in a column that gets
+     scanned vertically, so proportional digits make them visibly ragged.
+     Tabular figures line them up. */
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  button {
+    font-family: inherit; cursor: pointer; border: none; border-radius: var(--r-md);
+    transition: transform 0.12s var(--ease), background-color 0.15s var(--ease),
+                border-color 0.15s var(--ease), color 0.15s var(--ease), opacity 0.15s;
+  }
+  button:active { transform: scale(0.98); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  input, select, textarea {
+    font-family: inherit; font-size: 13.5px; color: var(--text);
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: var(--r-md); padding: 11px 13px;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  input::placeholder { color: var(--faint); }
+
+  .btn-primary {
+    width: 100%; padding: 12px; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: white; font-weight: 600; font-size: 14px;
+  }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+  .btn-ghost {
+    padding: 11px 15px; background: var(--surface-2); border: 1px solid var(--line);
+    color: var(--text); font-size: 13.5px; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-3); }
+  .btn-accent {
+    padding: 11px 17px; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: white; font-size: 13.5px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .btn-accent:hover:not(:disabled) { filter: brightness(1.08); }
+
+  .hidden { display: none !important; }
 
   /* ---------- Secret-entry gate ---------- */
   #gate {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: rgba(8, 6, 14, 0.88); backdrop-filter: blur(6px); z-index: 50;
+    background: rgba(8, 6, 14, 0.9); backdrop-filter: blur(8px); z-index: 50; padding: 20px;
   }
-  #gate.hidden { display: none; }
   .gate-card {
-    width: min(380px, 90vw); padding: 28px; border-radius: var(--radius);
-    background: var(--panel-strong); border: 1px solid var(--panel-border);
-    box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+    width: min(400px, 100%); padding: 30px; border-radius: var(--r-lg);
+    background: var(--surface); border: 1px solid var(--line);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
   }
-  .gate-card h1 { font-size: 17px; margin: 0 0 4px; }
-  .gate-card p { color: var(--text-dim); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
-  .gate-card input {
-    width: 100%; padding: 11px 12px; border-radius: 10px; margin-bottom: 10px;
-    border: 1px solid var(--panel-border); background: rgba(0,0,0,0.25); color: var(--text);
-    font-size: 13px; font-family: inherit;
+  .gate-mark {
+    width: 40px; height: 40px; border-radius: var(--r-sm); display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    font-weight: 700; color: white; margin-bottom: 16px;
   }
-  .gate-card input:focus { outline: none; border-color: var(--accent); }
-  .gate-error { color: var(--bad); font-size: 12.5px; min-height: 16px; margin-bottom: 8px; }
-
-  button {
-    font-family: inherit; cursor: pointer; border: none; border-radius: 10px;
-    transition: transform 0.12s var(--ease), background-color 0.15s var(--ease), border-color 0.15s var(--ease), opacity 0.15s;
-  }
-  button:active { transform: scale(0.97); }
-  button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-
-  .btn-primary {
-    width: 100%; padding: 11px; background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: white; font-weight: 600; font-size: 13.5px;
-  }
-  .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+  .gate-card h1 { font-size: 19px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .gate-card p { color: var(--dim); font-size: 13px; margin: 0 0 20px; max-width: 46ch; }
+  .gate-card input { width: 100%; margin-bottom: 12px; }
+  .gate-error { color: var(--bad); font-size: 13px; min-height: 18px; margin-bottom: 6px; }
 
   /* ---------- Shell ---------- */
-  #app { max-width: 1180px; margin: 0 auto; padding: 28px 24px 60px; }
-  .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; gap: 16px; flex-wrap: wrap; }
-  .brand { display: flex; align-items: center; gap: 10px; }
+  #app { max-width: 1200px; margin: 0 auto; padding: 30px 24px 70px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 12px; }
   .brand-mark {
-    width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+    width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
     background: linear-gradient(135deg, var(--accent), var(--accent-2)); font-weight: 700; color: white;
   }
-  .brand-text h1 { font-size: 16px; margin: 0; }
-  .brand-text span { font-size: 12px; color: var(--text-faint); }
+  .brand-text h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  .brand-text span { font-size: 12.5px; color: var(--faint); }
   .topbar-actions { display: flex; gap: 8px; align-items: center; }
   .host-pill {
-    font-size: 11.5px; color: var(--text-dim); background: var(--panel); border: 1px solid var(--panel-border);
-    padding: 6px 10px; border-radius: 999px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; color: var(--dim); background: var(--surface-2); border: 1px solid var(--line);
+    padding: 7px 12px; border-radius: 999px; max-width: 240px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .icon-btn {
-    width: 34px; height: 34px; display: grid; place-items: center; background: var(--panel);
-    border: 1px solid var(--panel-border); color: var(--text-dim);
+    width: 38px; height: 38px; display: grid; place-items: center; background: var(--surface-2);
+    border: 1px solid var(--line); color: var(--dim); font-size: 15px;
   }
   .icon-btn:hover { color: var(--text); border-color: var(--accent); }
 
-  /* ---------- Stat cards ---------- */
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 22px; }
-  .stat-card {
-    padding: 16px 18px; border-radius: var(--radius); background: var(--panel);
-    border: 1px solid var(--panel-border);
+  /* ---------- Overview panel ----------
+     One panel showing the key population as parts of a whole, rather
+     than a row of identical floating cards: these counts are shares of
+     one number, and a segmented bar says that in a way five separate
+     tiles cannot. */
+  .overview {
+    border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--surface);
+    padding: 20px 22px; margin-bottom: 20px;
   }
-  .stat-card .n { font-size: 24px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
-  .stat-card .l { font-size: 12px; color: var(--text-dim); }
-  .stat-card.active .n { color: var(--ok); }
-  .stat-card.revoked .n { color: var(--warn); }
-  .stat-card.banned .n { color: var(--bad); }
+  .overview-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .overview-head h2 { font-size: 14.5px; margin: 0; font-weight: 600; }
+  .overview-total { font-size: 13px; color: var(--dim); }
+  .overview-total b { color: var(--text); font-weight: 600; }
+
+  .meter { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: var(--surface-3); }
+  .meter span { display: block; transition: width 0.4s var(--ease); min-width: 0; }
+  .meter .seg-active { background: var(--ok); }
+  .meter .seg-revoked { background: var(--warn); }
+  .meter .seg-banned { background: var(--bad); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 15px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
+  .legend-item .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .legend-item b { color: var(--text); font-weight: 600; }
+  .dot-active { background: var(--ok); }
+  .dot-revoked { background: var(--warn); }
+  .dot-banned { background: var(--bad); }
+  .dot-expired { background: var(--lapsed); }
+  .dot-bound { background: var(--accent); }
 
   /* ---------- Toolbar ---------- */
-  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
-  .search-wrap { position: relative; flex: 1; min-width: 180px; }
-  .search-wrap input {
-    width: 100%; padding: 10px 12px 10px 34px; border-radius: 10px; border: 1px solid var(--panel-border);
-    background: var(--panel); color: var(--text); font-size: 13px; font-family: inherit;
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  .search-wrap { position: relative; flex: 1; min-width: 200px; }
+  .search-wrap input { width: 100%; padding-left: 38px; }
+  .search-wrap svg { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); opacity: 0.45; pointer-events: none; }
+
+  /* `appearance: none` strips the OS control chrome so the closed
+     select matches the inputs beside it; the chevron is drawn here
+     instead. The popup list itself is handled by `color-scheme` at the
+     root (see the note there) - these option rules are a belt-and-
+     braces fallback for browsers that style options from CSS. */
+  select {
+    appearance: none; -webkit-appearance: none;
+    padding-right: 36px; cursor: pointer;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a49bbf' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 13px center;
   }
-  .search-wrap input:focus { outline: none; border-color: var(--accent); }
-  .search-wrap svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); opacity: 0.5; }
-  select#statusFilter {
-    padding: 10px 12px; border-radius: 10px; border: 1px solid var(--panel-border);
-    background: var(--panel); color: var(--text); font-size: 13px; font-family: inherit;
-  }
-  .btn-ghost {
-    padding: 10px 14px; background: var(--panel); border: 1px solid var(--panel-border); color: var(--text);
-    font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;
-  }
-  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
-  .btn-accent {
-    padding: 10px 16px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: white;
-    font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;
-  }
-  .btn-accent:hover:not(:disabled) { filter: brightness(1.08); }
+  select:hover { border-color: var(--accent); }
+  select option { background: var(--surface-2); color: var(--text); }
 
   /* ---------- Table ---------- */
+  /* overflow-x: auto rather than hidden - at phone widths the row
+     actions and the Expires column were simply clipped off the right
+     edge with no way to reach them, which made the table read-only on
+     a phone. Scrolling keeps every column reachable, and an auto
+     scroll container still clips the rounded corners. */
   .table-wrap {
-    border-radius: var(--radius); border: 1px solid var(--panel-border); background: var(--panel);
-    overflow: hidden;
+    border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--surface);
+    overflow-x: auto; overflow-y: hidden;
   }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 540px; }
+  /* Sentence case, not the tracked-out uppercase these were - uppercase
+     micro-labels are harder to read and were the loudest thing on a
+     page whose actual content is the rows. */
   thead th {
-    text-align: left; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-faint);
-    padding: 12px 14px; border-bottom: 1px solid var(--panel-border); font-weight: 600;
+    text-align: left; font-size: 12px; color: var(--faint); font-weight: 500;
+    padding: 13px 16px; border-bottom: 1px solid var(--line);
   }
-  tbody td { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+  tbody td { padding: 13px 16px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
   tbody tr:last-child td { border-bottom: none; }
   tbody tr { transition: background-color 0.15s; }
-  tbody tr:hover { background: rgba(255,255,255,0.02); }
+  tbody tr:hover { background: rgba(255, 255, 255, 0.022); }
 
   .key-chip {
-    font-family: "SF Mono", Consolas, monospace; font-size: 12px; background: rgba(0,0,0,0.25);
-    padding: 4px 8px; border-radius: 7px; cursor: pointer; border: 1px solid transparent;
+    font-family: "SF Mono", ui-monospace, Consolas, monospace; font-size: 12.5px;
+    background: var(--surface-2); padding: 5px 9px; border-radius: var(--r-sm);
+    cursor: pointer; border: 1px solid var(--line); white-space: nowrap;
   }
-  .key-chip:hover { border-color: var(--accent); }
-  .note-cell { color: var(--text-dim); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .hwid-cell { font-size: 11.5px; color: var(--text-faint); }
-  .hwid-cell.bound { color: var(--text-dim); }
-  .ts-cell { color: var(--text-faint); font-size: 12px; white-space: nowrap; }
+  .key-chip:hover { border-color: var(--accent); color: var(--text); }
+  .hwid-cell { font-size: 12.5px; color: var(--faint); }
+  .hwid-cell.bound { color: var(--dim); font-family: "SF Mono", ui-monospace, Consolas, monospace; font-size: 12px; }
+  .ts-cell { color: var(--faint); font-size: 12.5px; white-space: nowrap; }
+  .exp-cell { font-size: 12.5px; white-space: nowrap; color: var(--dim); }
+  .exp-cell.never { color: var(--faint); }
+  .exp-cell.soon { color: var(--warn); }
+  .exp-cell.gone { color: var(--lapsed); }
 
   .pill {
-    display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600;
-    padding: 4px 10px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+    padding: 5px 11px; border-radius: 999px; white-space: nowrap;
   }
-  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
   .pill-active { color: var(--ok); background: var(--ok-soft); }
   .pill-revoked { color: var(--warn); background: var(--warn-soft); }
   .pill-banned { color: var(--bad); background: var(--bad-soft); }
+  .pill-expired { color: var(--lapsed); background: var(--lapsed-soft); }
 
-  .row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+  .status-cell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  th.col-status, td.col-status { min-width: 158px; }
+
+  /* Two inline actions and an overflow menu, rather than five buttons
+     in a row: five wrapped onto a second line at this width, which
+     made row heights ragged and put Delete directly under the cursor's
+     resting position. The rare and destructive ones now live one
+     deliberate click away. */
+  .row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: nowrap; }
   .row-actions button {
-    font-size: 11.5px; padding: 6px 9px; background: var(--panel); border: 1px solid var(--panel-border);
-    color: var(--text-dim); font-weight: 500; white-space: nowrap;
+    font-size: 12px; padding: 7px 11px; border-radius: var(--r-sm); background: var(--surface-2);
+    border: 1px solid var(--line); color: var(--dim); font-weight: 500; white-space: nowrap;
   }
-  .row-actions button:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
-  .row-actions button.danger:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); }
+  .row-actions button:hover:not(:disabled) { color: var(--text); border-color: var(--accent); background: var(--surface-3); }
+  .row-more { width: 32px; padding: 7px 0 !important; display: grid; place-items: center; line-height: 1; }
 
-  .empty-state, .loading-state { padding: 48px 20px; text-align: center; color: var(--text-faint); font-size: 13px; }
+  .menu {
+    position: fixed; z-index: 70; min-width: 164px; padding: 6px;
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; gap: 2px;
+  }
+  .menu button {
+    text-align: left; background: none; border: none; color: var(--dim);
+    font-size: 13px; padding: 9px 11px; border-radius: var(--r-sm); width: 100%;
+  }
+  .menu button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+  .menu button.danger { color: #e8899a; }
+  .menu button.danger:hover:not(:disabled) { background: var(--bad-soft); color: var(--bad); }
+  .menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
 
-  .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; font-size: 12.5px; color: var(--text-dim); }
+  .empty-state, .loading-state { padding: 56px 20px; text-align: center; color: var(--faint); }
+  .empty-state b { display: block; color: var(--dim); font-weight: 600; margin-bottom: 4px; }
+
+  .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 13px; color: var(--dim); }
   .pagination .controls { display: flex; gap: 8px; }
 
-  /* ---------- Modal (new key) ---------- */
+  /* ---------- Modals ---------- */
   .modal-overlay {
-    position: fixed; inset: 0; background: rgba(5,3,10,0.7); backdrop-filter: blur(4px);
-    display: flex; align-items: center; justify-content: center; z-index: 40;
+    position: fixed; inset: 0; background: rgba(5, 3, 10, 0.72); backdrop-filter: blur(6px);
+    display: flex; align-items: center; justify-content: center; z-index: 40; padding: 20px;
     animation: fade-in 0.15s var(--ease);
   }
-  .modal-overlay.hidden { display: none; }
   .modal-card {
-    width: min(420px, 90vw); padding: 24px; border-radius: var(--radius);
-    background: var(--panel-strong); border: 1px solid var(--panel-border);
-    box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+    width: min(450px, 100%); padding: 26px; border-radius: var(--r-lg);
+    background: var(--surface); border: 1px solid var(--line);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
   }
-  .modal-card h2 { font-size: 15px; margin: 0 0 14px; }
-  .modal-card label { font-size: 12px; color: var(--text-dim); display: block; margin-bottom: 6px; }
-  .modal-card input, .modal-card textarea {
-    width: 100%; padding: 10px 12px; border-radius: 9px; margin-bottom: 14px;
-    border: 1px solid var(--panel-border); background: rgba(0,0,0,0.25); color: var(--text);
-    font-size: 13px; font-family: inherit; resize: vertical;
+  .modal-card h2 { font-size: 16.5px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .modal-card .sub { font-size: 13px; color: var(--dim); margin: 0 0 20px; }
+  .field-label { font-size: 13px; color: var(--dim); display: block; margin-bottom: 9px; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+
+  /* Duration picker: preset chips plus an optional exact date, so the
+     common cases (a month, a year, forever) are one click and the
+     uncommon one is still reachable. */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    padding: 8px 13px; border-radius: 999px; font-size: 13px; font-weight: 500;
+    background: var(--surface-2); border: 1px solid var(--line); color: var(--dim);
   }
-  .modal-card input:focus, .modal-card textarea:focus { outline: none; border-color: var(--accent); }
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
-  .modal-actions button { padding: 9px 16px; font-size: 13px; }
+  .chip:hover { border-color: var(--accent); color: var(--text); }
+  .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+  .exact-wrap { margin-top: 14px; }
+  .exact-hint { font-size: 12.5px; color: var(--faint); margin: 0 0 7px; }
+  .exact-wrap input { width: 100%; }
+  .expiry-preview { margin-top: 12px; font-size: 13px; color: var(--dim); min-height: 20px; }
+  .expiry-preview b { color: var(--text); font-weight: 600; }
 
   .new-key-result {
-    margin-top: 2px; padding: 12px; border-radius: 10px; background: var(--accent-soft);
-    border: 1px solid rgba(168,85,247,0.35); font-size: 13px;
+    margin-top: 18px; padding: 15px; border-radius: var(--r-md); background: var(--accent-soft);
+    border: 1px solid rgba(168, 85, 247, 0.32);
   }
-  .new-key-result .key-chip { font-size: 13px; }
+  .new-key-result .rk { font-size: 12.5px; color: var(--dim); margin-bottom: 9px; }
+  .new-key-result .key-chip { font-size: 14px; letter-spacing: 0.02em; }
 
   @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
   /* ---------- Toasts ---------- */
-  #toasts { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 60; }
+  #toasts { position: fixed; bottom: 22px; right: 22px; display: flex; flex-direction: column; gap: 9px; z-index: 60; }
   .toast {
-    padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 500; color: white;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.4); animation: toast-in 0.2s var(--ease);
-    max-width: 320px;
+    padding: 12px 17px; border-radius: var(--r-md); font-size: 13.5px; font-weight: 500; color: white;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); animation: toast-in 0.2s var(--ease); max-width: 330px;
   }
-  .toast.ok { background: #16a34a; }
-  .toast.err { background: #dc2626; }
-  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .toast.ok { background: #15803d; }
+  .toast.err { background: #b91c1c; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
-  @media (max-width: 720px) {
-    .hwid-cell, .ts-cell:nth-of-type(2) { display: none; }
-    table thead th:nth-child(4), table tbody td:nth-child(4) { display: none; }
+  @media (max-width: 860px) {
+    th.col-device, td.col-device { display: none; }
+  }
+  @media (max-width: 680px) {
+    #app { padding: 22px 16px 60px; }
+    th.col-seen, td.col-seen { display: none; }
+    .row-actions { justify-content: flex-start; }
+    /* The key chip is the widest thing in the row and was pushing the
+       status, expiry and actions out of the initial scroll position -
+       tightened here so the useful columns are visible without having
+       to discover that the table scrolls. */
+    table { min-width: 0; }
+    tbody td, thead th { padding: 11px 10px; }
+    .key-chip { font-size: 11px; padding: 4px 7px; }
+    th.col-status, td.col-status { min-width: 0; }
+    .row-actions button { font-size: 11px; padding: 6px 8px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
   }
 </style>
 </head>
@@ -247,13 +388,13 @@
 
   <div id="gate">
     <div class="gate-card">
-      <h1>AfkStrike License Admin</h1>
-      <p>Paste the server's <code>ADMIN_SECRET</code> to manage keys. It's
-      kept only in this browser tab (sessionStorage) and sent as a header
-      on API calls to this same server - never anywhere else.</p>
+      <div class="gate-mark">A</div>
+      <h1>License admin</h1>
+      <p>Enter the server's admin secret to manage keys. It stays in this
+      browser tab only and is sent as a header to this server, nowhere else.</p>
       <div class="gate-error" id="gateError"></div>
       <input type="password" id="gateSecretInput" placeholder="Admin secret" autocomplete="off" />
-      <button class="btn-primary" id="gateSubmit">Unlock dashboard</button>
+      <button class="btn-primary" id="gateSubmit">Unlock</button>
     </div>
   </div>
 
@@ -262,38 +403,54 @@
       <div class="brand">
         <div class="brand-mark">A</div>
         <div class="brand-text">
-          <h1>License Admin</h1>
-          <span>AfkStrike - key management</span>
+          <h1>License admin</h1>
+          <span>AfkStrike</span>
         </div>
       </div>
       <div class="topbar-actions">
         <span class="host-pill" id="hostPill"></span>
-        <button class="icon-btn" id="refreshBtn" title="Refresh">&#x21bb;</button>
-        <button class="icon-btn" id="lockBtn" title="Lock / change secret">&#x1F512;</button>
+        <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        </button>
+        <button class="icon-btn" id="lockBtn" title="Lock" aria-label="Lock">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+        </button>
       </div>
     </div>
 
-    <div class="stats">
-      <div class="stat-card"><div class="n" id="statTotal">-</div><div class="l">Total keys</div></div>
-      <div class="stat-card active"><div class="n" id="statActive">-</div><div class="l">Active</div></div>
-      <div class="stat-card revoked"><div class="n" id="statRevoked">-</div><div class="l">Revoked</div></div>
-      <div class="stat-card banned"><div class="n" id="statBanned">-</div><div class="l">Banned</div></div>
-      <div class="stat-card"><div class="n" id="statBound">-</div><div class="l">Device-bound</div></div>
+    <div class="overview">
+      <div class="overview-head">
+        <h2>Key overview</h2>
+        <div class="overview-total"><b class="tnum" id="statTotal">-</b> keys in total</div>
+      </div>
+      <div class="meter" id="meter" aria-hidden="true">
+        <span class="seg-active" id="segActive" style="width:0%"></span>
+        <span class="seg-revoked" id="segRevoked" style="width:0%"></span>
+        <span class="seg-banned" id="segBanned" style="width:0%"></span>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><span class="dot dot-active"></span><b class="tnum" id="statActive">-</b> active</div>
+        <div class="legend-item"><span class="dot dot-revoked"></span><b class="tnum" id="statRevoked">-</b> revoked</div>
+        <div class="legend-item"><span class="dot dot-banned"></span><b class="tnum" id="statBanned">-</b> banned</div>
+        <div class="legend-item"><span class="dot dot-expired"></span><b class="tnum" id="statExpired">-</b> expired</div>
+        <div class="legend-item"><span class="dot dot-bound"></span><b class="tnum" id="statBound">-</b> bound to a device</div>
+      </div>
     </div>
 
     <div class="toolbar">
       <div class="search-wrap">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-        <input type="text" id="searchInput" placeholder="Search by key or note&hellip;" />
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input type="text" id="searchInput" placeholder="Search by key" />
       </div>
-      <select id="statusFilter">
-        <option value="">All statuses</option>
+      <select id="statusFilter" aria-label="Filter by status">
+        <option value="">All keys</option>
         <option value="active">Active</option>
         <option value="revoked">Revoked</option>
         <option value="banned">Banned</option>
+        <option value="expired">Expired</option>
       </select>
       <button class="btn-ghost" id="refreshBtn2">Refresh</button>
-      <button class="btn-accent" id="newKeyBtn">+ New key</button>
+      <button class="btn-accent" id="newKeyBtn">New key</button>
     </div>
 
     <div class="table-wrap">
@@ -301,37 +458,61 @@
         <thead>
           <tr>
             <th>Key</th>
-            <th>Note</th>
-            <th>Status</th>
-            <th>Device</th>
-            <th>Last seen</th>
+            <th class="col-status">Status</th>
+            <th class="col-device">Device</th>
+            <th>Expires</th>
+            <th class="col-seen">Last seen</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
       </table>
       <div class="loading-state hidden" id="loadingState">Loading&hellip;</div>
-      <div class="empty-state hidden" id="emptyState">No keys match this filter.</div>
+      <div class="empty-state hidden" id="emptyState"></div>
     </div>
 
     <div class="pagination">
-      <span id="pageInfo"></span>
+      <span class="tnum" id="pageInfo"></span>
       <div class="controls">
-        <button class="btn-ghost" id="prevPageBtn">&larr; Prev</button>
-        <button class="btn-ghost" id="nextPageBtn">Next &rarr;</button>
+        <button class="btn-ghost" id="prevPageBtn">Previous</button>
+        <button class="btn-ghost" id="nextPageBtn">Next</button>
       </div>
     </div>
   </div>
 
   <div class="modal-overlay hidden" id="newKeyModal">
     <div class="modal-card">
-      <h2>Create a license key</h2>
-      <label for="newKeyNote">Note (optional - order id, buyer email, etc.)</label>
-      <textarea id="newKeyNote" rows="2" placeholder="e.g. order #1234, buyer@example.com"></textarea>
+      <h2>Create a key</h2>
+      <p class="sub">The key binds to the first device that activates it.</p>
+      <span class="field-label">Valid for</span>
+      <div class="chips" id="newKeyChips"></div>
+      <div class="exact-wrap">
+        <p class="exact-hint">or pick an exact date</p>
+        <input type="date" id="newKeyExactDate" aria-label="Exact expiry date" />
+      </div>
+      <div class="expiry-preview" id="newKeyPreview"></div>
       <div id="newKeyResult"></div>
       <div class="modal-actions">
         <button class="btn-ghost" id="newKeyCancel">Close</button>
         <button class="btn-accent" id="newKeyCreate">Create key</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="expiryModal">
+    <div class="modal-card">
+      <h2>Change expiry</h2>
+      <p class="sub" id="expiryModalSub"></p>
+      <span class="field-label">Valid for</span>
+      <div class="chips" id="expiryChips"></div>
+      <div class="exact-wrap">
+        <p class="exact-hint">or pick an exact date</p>
+        <input type="date" id="expiryExactDate" aria-label="Exact expiry date" />
+      </div>
+      <div class="expiry-preview" id="expiryPreview"></div>
+      <div class="modal-actions">
+        <button class="btn-ghost" id="expiryCancel">Cancel</button>
+        <button class="btn-accent" id="expirySave">Save expiry</button>
       </div>
     </div>
   </div>
@@ -351,7 +532,7 @@ function getSecret() {
   try { return sessionStorage.getItem(SECRET_KEY) || ""; } catch { return ""; }
 }
 function setSecret(value) {
-  try { sessionStorage.setItem(SECRET_KEY, value); } catch { /* private window etc. - still works for this tab's lifetime via the in-memory fallback below */ }
+  try { sessionStorage.setItem(SECRET_KEY, value); } catch { /* private window etc. */ }
 }
 function clearSecret() {
   try { sessionStorage.removeItem(SECRET_KEY); } catch { /* ignore */ }
@@ -432,14 +613,66 @@ gateSecretInput.addEventListener("keydown", (e) => {
 });
 document.getElementById("lockBtn").addEventListener("click", () => showGate());
 
-// ---------- Stats ----------
+// ---------- Overview ----------
 async function refreshStats() {
   const stats = await api("/admin/stats");
+  const s = stats.byStatus;
   document.getElementById("statTotal").textContent = stats.total;
-  document.getElementById("statActive").textContent = stats.byStatus.active;
-  document.getElementById("statRevoked").textContent = stats.byStatus.revoked;
-  document.getElementById("statBanned").textContent = stats.byStatus.banned;
+  document.getElementById("statActive").textContent = s.active;
+  document.getElementById("statRevoked").textContent = s.revoked;
+  document.getElementById("statBanned").textContent = s.banned;
+  document.getElementById("statExpired").textContent = stats.expired ?? 0;
   document.getElementById("statBound").textContent = stats.bound;
+
+  // active/revoked/banned are mutually exclusive and sum to total, so
+  // they can share one bar honestly. `expired` and `bound` deliberately
+  // are NOT segments - a key can be active and expired at the same
+  // time, and adding them here would make the bar sum past 100% and
+  // imply buckets that don't exist. They stay as counts in the legend.
+  const total = stats.total || 0;
+  const pct = (n) => (total > 0 ? (n / total) * 100 : 0);
+  document.getElementById("segActive").style.width = `${pct(s.active)}%`;
+  document.getElementById("segRevoked").style.width = `${pct(s.revoked)}%`;
+  document.getElementById("segBanned").style.width = `${pct(s.banned)}%`;
+}
+
+// ---------- Expiry formatting ----------
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Within this long, an upcoming expiry is worth flagging amber rather
+// than stating neutrally - it is the window where you would want to
+// chase a renewal before the customer is locked out.
+const SOON_DAYS = 7;
+
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function fmtDateTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + ", " +
+         d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+/// Turns an expires_at into { text, cls } for the Expires column.
+/// Written from the reader's point of view - "in 12 days" is what you
+/// want to know at a glance, with the exact date on hover.
+function describeExpiry(iso) {
+  if (!iso) return { text: "Never", cls: "never", title: "This key does not expire" };
+  const when = new Date(iso).getTime();
+  const diff = when - Date.now();
+  const days = Math.round(Math.abs(diff) / DAY_MS);
+  if (diff <= 0) {
+    return { text: days === 0 ? "Expired today" : `Expired ${days}d ago`, cls: "gone", title: fmtDate(iso) };
+  }
+  const text = days === 0 ? "Expires today" : days === 1 ? "In 1 day" : `In ${days} days`;
+  return { text, cls: days <= SOON_DAYS ? "soon" : "", title: fmtDate(iso) };
+}
+
+function isExpired(row) {
+  return !!row.expires_at && new Date(row.expires_at).getTime() <= Date.now();
 }
 
 // ---------- Table / pagination ----------
@@ -447,24 +680,13 @@ const PAGE_SIZE = 25;
 let currentPage = 0;
 let currentRowCount = 0;
 let searchDebounce = null;
+let rowsByKey = new Map();
 
 const rowsEl = document.getElementById("rows");
 const loadingEl = document.getElementById("loadingState");
 const emptyEl = document.getElementById("emptyState");
 const searchInput = document.getElementById("searchInput");
 const statusFilter = document.getElementById("statusFilter");
-
-function fmtDate(iso) {
-  if (!iso) return "&mdash;";
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
-         d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
-function statusPill(status) {
-  const label = status.charAt(0).toUpperCase() + status.slice(1);
-  return `<span class="pill pill-${status}">${label}</span>`;
-}
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -485,7 +707,7 @@ async function loadPage(page) {
     rows = await api(`/admin/licenses?${params.toString()}`);
   } catch (e) {
     loadingEl.classList.add("hidden");
-    toast(e.message, "err");
+    if (e.message !== "unauthorized") toast(e.message, "err");
     return;
   }
   loadingEl.classList.add("hidden");
@@ -496,10 +718,15 @@ async function loadPage(page) {
 
 function renderRows(rows) {
   if (rows.length === 0) {
+    const filtered = statusFilter.value || searchInput.value.trim();
+    emptyEl.innerHTML = filtered
+      ? "<b>Nothing matches this filter</b>Clear the search or pick a different status."
+      : "<b>No keys yet</b>Create one to get started.";
     emptyEl.classList.remove("hidden");
     return;
   }
   emptyEl.classList.add("hidden");
+  rowsByKey = new Map(rows.map((r) => [r.license_key, r]));
   rowsEl.innerHTML = rows.map(rowHtml).join("");
 
   rowsEl.querySelectorAll("[data-copy-key]").forEach((el) => {
@@ -508,38 +735,99 @@ function renderRows(rows) {
   rowsEl.querySelectorAll("[data-action]").forEach((btn) => {
     btn.addEventListener("click", () => runAction(btn.dataset.action, btn.dataset.key, btn));
   });
+  rowsEl.querySelectorAll("[data-more]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openRowMenu(btn, btn.dataset.more, rowsByKey.get(btn.dataset.more));
+    });
+  });
 }
+
+// ---------- Row overflow menu ----------
+// One shared element rather than a menu per row: only ever one is open,
+// and this way nothing has to be torn down when the table re-renders.
+let openMenuEl = null;
+
+function closeRowMenu() {
+  if (openMenuEl) { openMenuEl.remove(); openMenuEl = null; }
+}
+
+function openRowMenu(anchor, key, row) {
+  closeRowMenu();
+  const menu = document.createElement("div");
+  menu.className = "menu";
+
+  const add = (label, handler, danger) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    if (danger) b.className = "danger";
+    b.addEventListener("click", () => { closeRowMenu(); handler(); });
+    menu.appendChild(b);
+  };
+
+  if (row && row.hwid) add("Reset device", () => runAction("reset-hwid", key, anchor));
+  if (row && row.status === "banned") add("Unban key", () => runAction("unban", key, anchor));
+  else add("Ban key", () => runAction("ban", key, anchor), true);
+
+  const sep = document.createElement("div");
+  sep.className = "sep";
+  menu.appendChild(sep);
+  add("Delete key", () => runAction("delete", key, anchor), true);
+
+  document.body.appendChild(menu);
+
+  // Positioned against the viewport (the menu is position: fixed), and
+  // flipped above the button when there isn't room below.
+  const r = anchor.getBoundingClientRect();
+  const mh = menu.offsetHeight;
+  const top = r.bottom + 6 + mh > window.innerHeight ? r.top - mh - 6 : r.bottom + 6;
+  menu.style.top = `${Math.max(8, top)}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8))}px`;
+  openMenuEl = menu;
+}
+
+document.addEventListener("click", (e) => {
+  if (openMenuEl && !openMenuEl.contains(e.target)) closeRowMenu();
+});
+window.addEventListener("resize", closeRowMenu);
+window.addEventListener("scroll", closeRowMenu, true);
 
 function rowHtml(row) {
   const hwidCell = row.hwid
     ? `<span class="hwid-cell bound" title="${escapeHtml(row.hwid)}">${escapeHtml(row.hwid.slice(0, 8))}&hellip;</span>`
-    : `<span class="hwid-cell">unbound</span>`;
+    : `<span class="hwid-cell">Unbound</span>`;
 
   // Escaped even though a license_key is server-generated from a fixed
-  // A-Z/2-9 alphabet and so cannot currently contain markup - this is
-  // the one value on the row that was being interpolated raw, and
-  // "the generator can't produce anything dangerous" is a property of
-  // code elsewhere, not of this template. Cheap to not depend on it.
+  // A-Z/2-9 alphabet and so cannot currently contain markup - "the
+  // generator can't produce anything dangerous" is a property of code
+  // elsewhere, not of this template. Cheap to not depend on it.
   const key = escapeHtml(row.license_key);
+
+  // An expired key keeps whatever status it has (usually active), so
+  // both facts are shown: the status pill plus an Expired pill. The
+  // server rejects it either way - see /verify's expiry guard.
+  const statusPill = `<span class="pill pill-${escapeHtml(row.status)}">${escapeHtml(row.status.charAt(0).toUpperCase() + row.status.slice(1))}</span>`;
+  const expiredPill = isExpired(row) ? `<span class="pill pill-expired">Expired</span>` : "";
+
+  const exp = describeExpiry(row.expires_at);
+
+  // Revoke and Expiry are the two reached for most often, so they stay
+  // inline; ban/unban, device reset and delete go behind the menu.
   const revokeBtn = row.status === "revoked"
     ? `<button data-action="unrevoke" data-key="${key}">Unrevoke</button>`
     : `<button data-action="revoke" data-key="${key}">Revoke</button>`;
-  const banBtn = row.status === "banned"
-    ? `<button data-action="unban" data-key="${key}">Unban</button>`
-    : `<button data-action="ban" data-key="${key}" class="danger">Ban</button>`;
-  const resetBtn = row.hwid
-    ? `<button data-action="reset-hwid" data-key="${key}">Reset device</button>`
-    : "";
-  const deleteBtn = `<button data-action="delete" data-key="${key}" class="danger">Delete</button>`;
+  const expiryBtn = `<button data-action="expiry" data-key="${key}">Expiry</button>`;
+  const moreBtn = `<button class="row-more" data-more="${key}" title="More actions" aria-label="More actions">&#x22EF;</button>`;
 
   return `
     <tr>
       <td><span class="key-chip" data-copy-key="${key}" title="Click to copy">${key}</span></td>
-      <td class="note-cell" title="${escapeHtml(row.note || "")}">${row.note ? escapeHtml(row.note) : "&mdash;"}</td>
-      <td>${statusPill(row.status)}</td>
-      <td>${hwidCell}</td>
-      <td class="ts-cell">${fmtDate(row.last_seen_at)}</td>
-      <td><div class="row-actions">${revokeBtn}${banBtn}${resetBtn}${deleteBtn}</div></td>
+      <td class="col-status"><div class="status-cell">${statusPill}${expiredPill}</div></td>
+      <td class="col-device">${hwidCell}</td>
+      <td class="exp-cell ${exp.cls} tnum" title="${escapeHtml(exp.title)}">${escapeHtml(exp.text)}</td>
+      <td class="ts-cell col-seen tnum">${escapeHtml(fmtDateTime(row.last_seen_at))}</td>
+      <td><div class="row-actions">${revokeBtn}${expiryBtn}${moreBtn}</div></td>
     </tr>
   `;
 }
@@ -552,6 +840,8 @@ function copyKey(key) {
 }
 
 async function runAction(action, key, btn) {
+  if (action === "expiry") { openExpiryModal(key); return; }
+
   if ((action === "delete" || action === "ban") &&
       !confirm(`${action === "delete" ? "Permanently delete" : "Ban"} license ${key}?`)) {
     return;
@@ -568,7 +858,7 @@ async function runAction(action, key, btn) {
     refreshStats().catch(() => {});
     loadPage(currentPage);
   } catch (e) {
-    toast(e.message, "err");
+    if (e.message !== "unauthorized") toast(e.message, "err");
     btn.disabled = false;
   }
 }
@@ -576,7 +866,7 @@ async function runAction(action, key, btn) {
 function updatePagination() {
   const start = currentPage * PAGE_SIZE;
   document.getElementById("pageInfo").textContent =
-    currentRowCount === 0 ? "No results" : `Showing ${start + 1}&ndash;${start + currentRowCount}`;
+    currentRowCount === 0 ? "No results" : `Showing ${start + 1}–${start + currentRowCount}`;
   document.getElementById("prevPageBtn").disabled = currentPage === 0;
   document.getElementById("nextPageBtn").disabled = currentRowCount < PAGE_SIZE;
 }
@@ -591,16 +881,88 @@ searchInput.addEventListener("input", () => {
   searchDebounce = setTimeout(() => loadPage(0), 300);
 });
 
+// ---------- Duration picker ----------
+// Shared by the create-key modal and the change-expiry modal: the same
+// preset chips plus an exact date, so there is one way to express an
+// expiry rather than two that drift apart.
+const PRESETS = [
+  { label: "Never", days: 0 },
+  { label: "7 days", days: 7 },
+  { label: "30 days", days: 30 },
+  { label: "90 days", days: 90 },
+  { label: "1 year", days: 365 },
+];
+
+function buildPicker({ chipsEl, dateEl, previewEl, initialDays = 0 }) {
+  const state = { days: initialDays, exact: "" };
+
+  function render() {
+    [...chipsEl.children].forEach((c) => {
+      c.classList.toggle("on", !state.exact && Number(c.dataset.days) === state.days);
+    });
+    if (state.exact) {
+      const when = new Date(state.exact + "T23:59:59");
+      previewEl.innerHTML = Number.isNaN(when.getTime())
+        ? "That date isn't valid."
+        : `Expires <b>${escapeHtml(fmtDate(when.toISOString()))}</b>`;
+    } else if (state.days === 0) {
+      previewEl.innerHTML = "This key will <b>never expire</b>";
+    } else {
+      const when = new Date(Date.now() + state.days * DAY_MS);
+      previewEl.innerHTML = `Expires <b>${escapeHtml(fmtDate(when.toISOString()))}</b>`;
+    }
+  }
+
+  chipsEl.innerHTML = "";
+  for (const preset of PRESETS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chip";
+    btn.textContent = preset.label;
+    btn.dataset.days = String(preset.days);
+    btn.addEventListener("click", () => {
+      state.days = preset.days;
+      state.exact = "";
+      dateEl.value = "";
+      render();
+    });
+    chipsEl.appendChild(btn);
+  }
+
+  dateEl.addEventListener("input", () => {
+    state.exact = dateEl.value;
+    render();
+  });
+
+  render();
+
+  return {
+    reset(days = 0) { state.days = days; state.exact = ""; dateEl.value = ""; render(); },
+    // The body shape POST /admin/licenses and .../expiry both accept.
+    // An exact date wins when one is set; otherwise the chip's days,
+    // where 0 means "never" (the server treats 0 days as no expiry
+    // rather than "expires immediately" - see resolveExpiry).
+    payload() {
+      if (state.exact) return { expires_at: new Date(state.exact + "T23:59:59").toISOString() };
+      return { expires_in_days: state.days };
+    },
+  };
+}
+
 // ---------- New-key modal ----------
 const newKeyModal = document.getElementById("newKeyModal");
-const newKeyNote = document.getElementById("newKeyNote");
 const newKeyResult = document.getElementById("newKeyResult");
+const newKeyPicker = buildPicker({
+  chipsEl: document.getElementById("newKeyChips"),
+  dateEl: document.getElementById("newKeyExactDate"),
+  previewEl: document.getElementById("newKeyPreview"),
+});
 
 function openNewKeyModal() {
-  newKeyNote.value = "";
   newKeyResult.innerHTML = "";
+  newKeyResult.className = "";
+  newKeyPicker.reset(0);
   newKeyModal.classList.remove("hidden");
-  newKeyNote.focus();
 }
 function closeNewKeyModal() {
   newKeyModal.classList.add("hidden");
@@ -618,17 +980,74 @@ document.getElementById("newKeyCreate").addEventListener("click", async (e) => {
   try {
     const created = await api("/admin/licenses", {
       method: "POST",
-      body: JSON.stringify({ note: newKeyNote.value.trim() || undefined }),
+      body: JSON.stringify(newKeyPicker.payload()),
     });
-    newKeyResult.innerHTML = `New key: <span class="key-chip" data-copy-key="${created.license_key}" title="Click to copy">${created.license_key}</span>`;
-    newKeyResult.classList.add("new-key-result");
-    newKeyResult.querySelector("[data-copy-key]").addEventListener("click", (ev) => copyKey(ev.target.dataset.copyKey));
+    const expiryLine = created.expires_at
+      ? `Expires ${escapeHtml(fmtDate(created.expires_at))}`
+      : "Never expires";
+    newKeyResult.className = "new-key-result";
+    newKeyResult.innerHTML =
+      `<div class="rk">${expiryLine} &middot; click the key to copy it</div>` +
+      `<span class="key-chip" data-copy-key="${escapeHtml(created.license_key)}" title="Click to copy">${escapeHtml(created.license_key)}</span>`;
+    newKeyResult.querySelector("[data-copy-key]")
+      .addEventListener("click", (ev) => copyKey(ev.currentTarget.dataset.copyKey));
     toast("Key created.");
   } catch (err) {
-    toast(err.message, "err");
+    if (err.message !== "unauthorized") toast(err.message, "err");
   } finally {
     btn.disabled = false;
   }
+});
+
+// ---------- Change-expiry modal ----------
+const expiryModal = document.getElementById("expiryModal");
+const expiryModalSub = document.getElementById("expiryModalSub");
+let expiryModalKey = null;
+const expiryPicker = buildPicker({
+  chipsEl: document.getElementById("expiryChips"),
+  dateEl: document.getElementById("expiryExactDate"),
+  previewEl: document.getElementById("expiryPreview"),
+});
+
+function openExpiryModal(key) {
+  expiryModalKey = key;
+  expiryModalSub.textContent = key;
+  expiryPicker.reset(0);
+  expiryModal.classList.remove("hidden");
+}
+function closeExpiryModal() {
+  expiryModal.classList.add("hidden");
+  expiryModalKey = null;
+}
+
+document.getElementById("expiryCancel").addEventListener("click", closeExpiryModal);
+expiryModal.addEventListener("click", (e) => { if (e.target === expiryModal) closeExpiryModal(); });
+
+document.getElementById("expirySave").addEventListener("click", async (e) => {
+  if (!expiryModalKey) return;
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const result = await api(`/admin/licenses/${encodeURIComponent(expiryModalKey)}/expiry`, {
+      method: "POST",
+      body: JSON.stringify(expiryPicker.payload()),
+    });
+    toast(result.expires_at ? `Expiry set to ${fmtDate(result.expires_at)}.` : "Expiry removed.");
+    closeExpiryModal();
+    refreshStats().catch(() => {});
+    loadPage(currentPage);
+  } catch (err) {
+    if (err.message !== "unauthorized") toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (openMenuEl) closeRowMenu();
+  else if (!expiryModal.classList.contains("hidden")) closeExpiryModal();
+  else if (!newKeyModal.classList.contains("hidden")) closeNewKeyModal();
 });
 
 // ---------- Boot ----------
