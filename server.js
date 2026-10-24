@@ -286,8 +286,8 @@ app.use((_req, res, next) => {
   next();
 });
 
-// Serves public/index.html (the admin dashboard) and nothing else -
-// this directory has exactly one file in it. express.static calls
+// Serves the admin dashboard out of public/ (index.html plus the app
+// logo it shows as its mark and favicon). express.static calls
 // next() for any request that doesn't match a real file under here,
 // so this sits harmlessly in front of /health, /verify, and /admin/*
 // below rather than intercepting them. The dashboard itself carries no

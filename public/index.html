@@ -24,6 +24,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="logo.png" />
 <title>AfkStrike - License Admin</title>
 <style>
   :root {
@@ -144,10 +145,16 @@
     background: var(--surface); border: 1px solid var(--line);
     box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
   }
+  /* Both marks hold the real app icon (public/logo.png - the same
+     artwork the Windows build ships as its .ico) rather than a letter
+     on a gradient. The gradient fill is dropped because the logo
+     carries its own; the rounded corner stays so it matches the
+     surrounding cards. */
+  .gate-mark, .brand-mark { overflow: hidden; }
+  .gate-mark img, .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
   .gate-mark {
-    width: 40px; height: 40px; border-radius: var(--r-sm); display: grid; place-items: center;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    font-weight: 700; color: white; margin-bottom: 16px;
+    width: 40px; height: 40px; border-radius: var(--r-sm);
+    margin-bottom: 16px;
   }
   .gate-card h1 { font-size: 19px; margin: 0 0 6px; letter-spacing: -0.01em; }
   .gate-card p { color: var(--dim); font-size: 13px; margin: 0 0 20px; max-width: 46ch; }
@@ -159,8 +166,7 @@
   .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; }
   .brand { display: flex; align-items: center; gap: 12px; }
   .brand-mark {
-    width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2)); font-weight: 700; color: white;
+    width: 38px; height: 38px; border-radius: 12px;
   }
   .brand-text h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
   .brand-text span { font-size: 12.5px; color: var(--faint); }
@@ -388,7 +394,7 @@
 
   <div id="gate">
     <div class="gate-card">
-      <div class="gate-mark">A</div>
+      <div class="gate-mark"><img src="logo.png" alt="" /></div>
       <h1>License admin</h1>
       <p>Enter the server's admin secret to manage keys. It stays in this
       browser tab only and is sent as a header to this server, nowhere else.</p>
@@ -401,7 +407,7 @@
   <div id="app" class="hidden">
     <div class="topbar">
       <div class="brand">
-        <div class="brand-mark">A</div>
+        <div class="brand-mark"><img src="logo.png" alt="" /></div>
         <div class="brand-text">
           <h1>License admin</h1>
           <span>AfkStrike</span>
