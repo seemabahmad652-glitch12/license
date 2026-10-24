@@ -1,0 +1,640 @@
+<!doctype html>
+<!--
+  AfkStrike license admin dashboard - a single self-contained static
+  page (no bundler, no framework, matches the desktop app's own "plain
+  HTML/CSS/JS" style) served by server.js at the server's root URL.
+
+  It carries no secret of its own: the Admin Secret is typed in once by
+  whoever opens this page, kept only in this tab's sessionStorage (gone
+  on tab close, never sent anywhere but this server), and attached as
+  the X-Admin-Secret header on every API call below - exactly what
+  README.md's curl examples already do by hand. This page is just a
+  friendlier way to drive the same /admin/* routes documented there.
+
+  Nothing here is sensitive to serve statically: without the real
+  secret every API call just gets a 401, same as a guess over curl.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AfkStrike - License Admin</title>
+<style>
+  :root {
+    --bg: #0c0914;
+    --bg-soft: #130f20;
+    --panel: rgba(255, 255, 255, 0.04);
+    --panel-border: rgba(255, 255, 255, 0.08);
+    --panel-strong: rgba(255, 255, 255, 0.07);
+    --text: #f2eefb;
+    --text-dim: #a79cc4;
+    --text-faint: #6f6485;
+    --accent: #a855f7;
+    --accent-2: #7c3aed;
+    --accent-soft: rgba(168, 85, 247, 0.16);
+    --ok: #34d399;
+    --ok-soft: rgba(52, 211, 153, 0.14);
+    --warn: #fbbf24;
+    --warn-soft: rgba(251, 191, 36, 0.14);
+    --bad: #f87171;
+    --bad-soft: rgba(248, 113, 113, 0.14);
+    --radius: 14px;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    font-family: -apple-system, "Segoe UI", Inter, Roboto, system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background:
+      radial-gradient(900px 500px at 15% -10%, rgba(124, 58, 237, 0.25), transparent 60%),
+      radial-gradient(700px 500px at 110% 10%, rgba(168, 85, 247, 0.14), transparent 55%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100%;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--accent); }
+
+  /* ---------- Secret-entry gate ---------- */
+  #gate {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(8, 6, 14, 0.88); backdrop-filter: blur(6px); z-index: 50;
+  }
+  #gate.hidden { display: none; }
+  .gate-card {
+    width: min(380px, 90vw); padding: 28px; border-radius: var(--radius);
+    background: var(--panel-strong); border: 1px solid var(--panel-border);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+  }
+  .gate-card h1 { font-size: 17px; margin: 0 0 4px; }
+  .gate-card p { color: var(--text-dim); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
+  .gate-card input {
+    width: 100%; padding: 11px 12px; border-radius: 10px; margin-bottom: 10px;
+    border: 1px solid var(--panel-border); background: rgba(0,0,0,0.25); color: var(--text);
+    font-size: 13px; font-family: inherit;
+  }
+  .gate-card input:focus { outline: none; border-color: var(--accent); }
+  .gate-error { color: var(--bad); font-size: 12.5px; min-height: 16px; margin-bottom: 8px; }
+
+  button {
+    font-family: inherit; cursor: pointer; border: none; border-radius: 10px;
+    transition: transform 0.12s var(--ease), background-color 0.15s var(--ease), border-color 0.15s var(--ease), opacity 0.15s;
+  }
+  button:active { transform: scale(0.97); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  .btn-primary {
+    width: 100%; padding: 11px; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: white; font-weight: 600; font-size: 13.5px;
+  }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+  /* ---------- Shell ---------- */
+  #app { max-width: 1180px; margin: 0 auto; padding: 28px 24px 60px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; gap: 16px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-mark {
+    width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); font-weight: 700; color: white;
+  }
+  .brand-text h1 { font-size: 16px; margin: 0; }
+  .brand-text span { font-size: 12px; color: var(--text-faint); }
+  .topbar-actions { display: flex; gap: 8px; align-items: center; }
+  .host-pill {
+    font-size: 11.5px; color: var(--text-dim); background: var(--panel); border: 1px solid var(--panel-border);
+    padding: 6px 10px; border-radius: 999px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .icon-btn {
+    width: 34px; height: 34px; display: grid; place-items: center; background: var(--panel);
+    border: 1px solid var(--panel-border); color: var(--text-dim);
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  /* ---------- Stat cards ---------- */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 22px; }
+  .stat-card {
+    padding: 16px 18px; border-radius: var(--radius); background: var(--panel);
+    border: 1px solid var(--panel-border);
+  }
+  .stat-card .n { font-size: 24px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+  .stat-card .l { font-size: 12px; color: var(--text-dim); }
+  .stat-card.active .n { color: var(--ok); }
+  .stat-card.revoked .n { color: var(--warn); }
+  .stat-card.banned .n { color: var(--bad); }
+
+  /* ---------- Toolbar ---------- */
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .search-wrap { position: relative; flex: 1; min-width: 180px; }
+  .search-wrap input {
+    width: 100%; padding: 10px 12px 10px 34px; border-radius: 10px; border: 1px solid var(--panel-border);
+    background: var(--panel); color: var(--text); font-size: 13px; font-family: inherit;
+  }
+  .search-wrap input:focus { outline: none; border-color: var(--accent); }
+  .search-wrap svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); opacity: 0.5; }
+  select#statusFilter {
+    padding: 10px 12px; border-radius: 10px; border: 1px solid var(--panel-border);
+    background: var(--panel); color: var(--text); font-size: 13px; font-family: inherit;
+  }
+  .btn-ghost {
+    padding: 10px 14px; background: var(--panel); border: 1px solid var(--panel-border); color: var(--text);
+    font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+  .btn-accent {
+    padding: 10px 16px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: white;
+    font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-accent:hover:not(:disabled) { filter: brightness(1.08); }
+
+  /* ---------- Table ---------- */
+  .table-wrap {
+    border-radius: var(--radius); border: 1px solid var(--panel-border); background: var(--panel);
+    overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-faint);
+    padding: 12px 14px; border-bottom: 1px solid var(--panel-border); font-weight: 600;
+  }
+  tbody td { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr { transition: background-color 0.15s; }
+  tbody tr:hover { background: rgba(255,255,255,0.02); }
+
+  .key-chip {
+    font-family: "SF Mono", Consolas, monospace; font-size: 12px; background: rgba(0,0,0,0.25);
+    padding: 4px 8px; border-radius: 7px; cursor: pointer; border: 1px solid transparent;
+  }
+  .key-chip:hover { border-color: var(--accent); }
+  .note-cell { color: var(--text-dim); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hwid-cell { font-size: 11.5px; color: var(--text-faint); }
+  .hwid-cell.bound { color: var(--text-dim); }
+  .ts-cell { color: var(--text-faint); font-size: 12px; white-space: nowrap; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600;
+    padding: 4px 10px; border-radius: 999px;
+  }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill-active { color: var(--ok); background: var(--ok-soft); }
+  .pill-revoked { color: var(--warn); background: var(--warn-soft); }
+  .pill-banned { color: var(--bad); background: var(--bad-soft); }
+
+  .row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+  .row-actions button {
+    font-size: 11.5px; padding: 6px 9px; background: var(--panel); border: 1px solid var(--panel-border);
+    color: var(--text-dim); font-weight: 500; white-space: nowrap;
+  }
+  .row-actions button:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+  .row-actions button.danger:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); }
+
+  .empty-state, .loading-state { padding: 48px 20px; text-align: center; color: var(--text-faint); font-size: 13px; }
+
+  .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; font-size: 12.5px; color: var(--text-dim); }
+  .pagination .controls { display: flex; gap: 8px; }
+
+  /* ---------- Modal (new key) ---------- */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(5,3,10,0.7); backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center; z-index: 40;
+    animation: fade-in 0.15s var(--ease);
+  }
+  .modal-overlay.hidden { display: none; }
+  .modal-card {
+    width: min(420px, 90vw); padding: 24px; border-radius: var(--radius);
+    background: var(--panel-strong); border: 1px solid var(--panel-border);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+  }
+  .modal-card h2 { font-size: 15px; margin: 0 0 14px; }
+  .modal-card label { font-size: 12px; color: var(--text-dim); display: block; margin-bottom: 6px; }
+  .modal-card input, .modal-card textarea {
+    width: 100%; padding: 10px 12px; border-radius: 9px; margin-bottom: 14px;
+    border: 1px solid var(--panel-border); background: rgba(0,0,0,0.25); color: var(--text);
+    font-size: 13px; font-family: inherit; resize: vertical;
+  }
+  .modal-card input:focus, .modal-card textarea:focus { outline: none; border-color: var(--accent); }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal-actions button { padding: 9px 16px; font-size: 13px; }
+
+  .new-key-result {
+    margin-top: 2px; padding: 12px; border-radius: 10px; background: var(--accent-soft);
+    border: 1px solid rgba(168,85,247,0.35); font-size: 13px;
+  }
+  .new-key-result .key-chip { font-size: 13px; }
+
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ---------- Toasts ---------- */
+  #toasts { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 60; }
+  .toast {
+    padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 500; color: white;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4); animation: toast-in 0.2s var(--ease);
+    max-width: 320px;
+  }
+  .toast.ok { background: #16a34a; }
+  .toast.err { background: #dc2626; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  @media (max-width: 720px) {
+    .hwid-cell, .ts-cell:nth-of-type(2) { display: none; }
+    table thead th:nth-child(4), table tbody td:nth-child(4) { display: none; }
+  }
+</style>
+</head>
+<body>
+
+  <div id="gate">
+    <div class="gate-card">
+      <h1>AfkStrike License Admin</h1>
+      <p>Paste the server's <code>ADMIN_SECRET</code> to manage keys. It's
+      kept only in this browser tab (sessionStorage) and sent as a header
+      on API calls to this same server - never anywhere else.</p>
+      <div class="gate-error" id="gateError"></div>
+      <input type="password" id="gateSecretInput" placeholder="Admin secret" autocomplete="off" />
+      <button class="btn-primary" id="gateSubmit">Unlock dashboard</button>
+    </div>
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-mark">A</div>
+        <div class="brand-text">
+          <h1>License Admin</h1>
+          <span>AfkStrike - key management</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span class="host-pill" id="hostPill"></span>
+        <button class="icon-btn" id="refreshBtn" title="Refresh">&#x21bb;</button>
+        <button class="icon-btn" id="lockBtn" title="Lock / change secret">&#x1F512;</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat-card"><div class="n" id="statTotal">-</div><div class="l">Total keys</div></div>
+      <div class="stat-card active"><div class="n" id="statActive">-</div><div class="l">Active</div></div>
+      <div class="stat-card revoked"><div class="n" id="statRevoked">-</div><div class="l">Revoked</div></div>
+      <div class="stat-card banned"><div class="n" id="statBanned">-</div><div class="l">Banned</div></div>
+      <div class="stat-card"><div class="n" id="statBound">-</div><div class="l">Device-bound</div></div>
+    </div>
+
+    <div class="toolbar">
+      <div class="search-wrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input type="text" id="searchInput" placeholder="Search by key or note&hellip;" />
+      </div>
+      <select id="statusFilter">
+        <option value="">All statuses</option>
+        <option value="active">Active</option>
+        <option value="revoked">Revoked</option>
+        <option value="banned">Banned</option>
+      </select>
+      <button class="btn-ghost" id="refreshBtn2">Refresh</button>
+      <button class="btn-accent" id="newKeyBtn">+ New key</button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Key</th>
+            <th>Note</th>
+            <th>Status</th>
+            <th>Device</th>
+            <th>Last seen</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="loading-state hidden" id="loadingState">Loading&hellip;</div>
+      <div class="empty-state hidden" id="emptyState">No keys match this filter.</div>
+    </div>
+
+    <div class="pagination">
+      <span id="pageInfo"></span>
+      <div class="controls">
+        <button class="btn-ghost" id="prevPageBtn">&larr; Prev</button>
+        <button class="btn-ghost" id="nextPageBtn">Next &rarr;</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="newKeyModal">
+    <div class="modal-card">
+      <h2>Create a license key</h2>
+      <label for="newKeyNote">Note (optional - order id, buyer email, etc.)</label>
+      <textarea id="newKeyNote" rows="2" placeholder="e.g. order #1234, buyer@example.com"></textarea>
+      <div id="newKeyResult"></div>
+      <div class="modal-actions">
+        <button class="btn-ghost" id="newKeyCancel">Close</button>
+        <button class="btn-accent" id="newKeyCreate">Create key</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+<script>
+"use strict";
+
+// ---------- Tiny API client ----------
+// Same origin as this page (the license server itself), so no base
+// URL to configure - this dashboard only ever exists alongside the
+// server it manages.
+const SECRET_KEY = "afkstrike_admin_secret";
+
+function getSecret() {
+  try { return sessionStorage.getItem(SECRET_KEY) || ""; } catch { return ""; }
+}
+function setSecret(value) {
+  try { sessionStorage.setItem(SECRET_KEY, value); } catch { /* private window etc. - still works for this tab's lifetime via the in-memory fallback below */ }
+}
+function clearSecret() {
+  try { sessionStorage.removeItem(SECRET_KEY); } catch { /* ignore */ }
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    ...options,
+    headers: {
+      "X-Admin-Secret": getSecret(),
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  if (res.status === 401) {
+    showGate("That secret was rejected by the server.");
+    throw new Error("unauthorized");
+  }
+  if (!res.ok) {
+    let message = `Request failed (${res.status}).`;
+    try {
+      const body = await res.json();
+      if (body && body.error) message = body.error;
+      if (body && body.message) message = body.message;
+    } catch { /* non-JSON error body - keep the generic message */ }
+    throw new Error(message);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+// ---------- Toasts ----------
+const toastsEl = document.getElementById("toasts");
+function toast(message, kind = "ok") {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.textContent = message;
+  toastsEl.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+// ---------- Gate (secret entry) ----------
+const gateEl = document.getElementById("gate");
+const appEl = document.getElementById("app");
+const gateSecretInput = document.getElementById("gateSecretInput");
+const gateError = document.getElementById("gateError");
+
+function showGate(error) {
+  clearSecret();
+  gateEl.classList.remove("hidden");
+  appEl.classList.add("hidden");
+  gateError.textContent = error || "";
+  gateSecretInput.value = "";
+  gateSecretInput.focus();
+}
+
+async function tryUnlock(secret) {
+  setSecret(secret);
+  try {
+    await refreshStats();
+  } catch {
+    return; // api() already called showGate() on a 401
+  }
+  gateEl.classList.add("hidden");
+  appEl.classList.remove("hidden");
+  document.getElementById("hostPill").textContent = location.host;
+  loadPage(0);
+}
+
+document.getElementById("gateSubmit").addEventListener("click", () => {
+  const value = gateSecretInput.value.trim();
+  if (!value) { gateError.textContent = "Enter the admin secret first."; return; }
+  gateError.textContent = "";
+  tryUnlock(value);
+});
+gateSecretInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("gateSubmit").click();
+});
+document.getElementById("lockBtn").addEventListener("click", () => showGate());
+
+// ---------- Stats ----------
+async function refreshStats() {
+  const stats = await api("/admin/stats");
+  document.getElementById("statTotal").textContent = stats.total;
+  document.getElementById("statActive").textContent = stats.byStatus.active;
+  document.getElementById("statRevoked").textContent = stats.byStatus.revoked;
+  document.getElementById("statBanned").textContent = stats.byStatus.banned;
+  document.getElementById("statBound").textContent = stats.bound;
+}
+
+// ---------- Table / pagination ----------
+const PAGE_SIZE = 25;
+let currentPage = 0;
+let currentRowCount = 0;
+let searchDebounce = null;
+
+const rowsEl = document.getElementById("rows");
+const loadingEl = document.getElementById("loadingState");
+const emptyEl = document.getElementById("emptyState");
+const searchInput = document.getElementById("searchInput");
+const statusFilter = document.getElementById("statusFilter");
+
+function fmtDate(iso) {
+  if (!iso) return "&mdash;";
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
+         d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+function statusPill(status) {
+  const label = status.charAt(0).toUpperCase() + status.slice(1);
+  return `<span class="pill pill-${status}">${label}</span>`;
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function loadPage(page) {
+  currentPage = page;
+  loadingEl.classList.remove("hidden");
+  emptyEl.classList.add("hidden");
+  rowsEl.innerHTML = "";
+
+  const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
+  if (statusFilter.value) params.set("status", statusFilter.value);
+  if (searchInput.value.trim()) params.set("q", searchInput.value.trim());
+
+  let rows;
+  try {
+    rows = await api(`/admin/licenses?${params.toString()}`);
+  } catch (e) {
+    loadingEl.classList.add("hidden");
+    toast(e.message, "err");
+    return;
+  }
+  loadingEl.classList.add("hidden");
+  currentRowCount = rows.length;
+  renderRows(rows);
+  updatePagination();
+}
+
+function renderRows(rows) {
+  if (rows.length === 0) {
+    emptyEl.classList.remove("hidden");
+    return;
+  }
+  emptyEl.classList.add("hidden");
+  rowsEl.innerHTML = rows.map(rowHtml).join("");
+
+  rowsEl.querySelectorAll("[data-copy-key]").forEach((el) => {
+    el.addEventListener("click", () => copyKey(el.dataset.copyKey));
+  });
+  rowsEl.querySelectorAll("[data-action]").forEach((btn) => {
+    btn.addEventListener("click", () => runAction(btn.dataset.action, btn.dataset.key, btn));
+  });
+}
+
+function rowHtml(row) {
+  const hwidCell = row.hwid
+    ? `<span class="hwid-cell bound" title="${escapeHtml(row.hwid)}">${escapeHtml(row.hwid.slice(0, 8))}&hellip;</span>`
+    : `<span class="hwid-cell">unbound</span>`;
+
+  const key = row.license_key;
+  const revokeBtn = row.status === "revoked"
+    ? `<button data-action="unrevoke" data-key="${key}">Unrevoke</button>`
+    : `<button data-action="revoke" data-key="${key}">Revoke</button>`;
+  const banBtn = row.status === "banned"
+    ? `<button data-action="unban" data-key="${key}">Unban</button>`
+    : `<button data-action="ban" data-key="${key}" class="danger">Ban</button>`;
+  const resetBtn = row.hwid
+    ? `<button data-action="reset-hwid" data-key="${key}">Reset device</button>`
+    : "";
+  const deleteBtn = `<button data-action="delete" data-key="${key}" class="danger">Delete</button>`;
+
+  return `
+    <tr>
+      <td><span class="key-chip" data-copy-key="${key}" title="Click to copy">${key}</span></td>
+      <td class="note-cell" title="${escapeHtml(row.note || "")}">${row.note ? escapeHtml(row.note) : "&mdash;"}</td>
+      <td>${statusPill(row.status)}</td>
+      <td>${hwidCell}</td>
+      <td class="ts-cell">${fmtDate(row.last_seen_at)}</td>
+      <td><div class="row-actions">${revokeBtn}${banBtn}${resetBtn}${deleteBtn}</div></td>
+    </tr>
+  `;
+}
+
+function copyKey(key) {
+  navigator.clipboard?.writeText(key).then(
+    () => toast("Key copied."),
+    () => toast("Couldn't copy - select and copy it manually.", "err")
+  );
+}
+
+async function runAction(action, key, btn) {
+  if ((action === "delete" || action === "ban") &&
+      !confirm(`${action === "delete" ? "Permanently delete" : "Ban"} license ${key}?`)) {
+    return;
+  }
+  btn.disabled = true;
+  try {
+    if (action === "delete") {
+      await api(`/admin/licenses/${encodeURIComponent(key)}`, { method: "DELETE" });
+      toast("Key deleted.");
+    } else {
+      await api(`/admin/licenses/${encodeURIComponent(key)}/${action}`, { method: "POST" });
+      toast(`Key ${action.replace("-", " ")}d.`);
+    }
+    refreshStats().catch(() => {});
+    loadPage(currentPage);
+  } catch (e) {
+    toast(e.message, "err");
+    btn.disabled = false;
+  }
+}
+
+function updatePagination() {
+  const start = currentPage * PAGE_SIZE;
+  document.getElementById("pageInfo").textContent =
+    currentRowCount === 0 ? "No results" : `Showing ${start + 1}&ndash;${start + currentRowCount}`;
+  document.getElementById("prevPageBtn").disabled = currentPage === 0;
+  document.getElementById("nextPageBtn").disabled = currentRowCount < PAGE_SIZE;
+}
+
+document.getElementById("prevPageBtn").addEventListener("click", () => { if (currentPage > 0) loadPage(currentPage - 1); });
+document.getElementById("nextPageBtn").addEventListener("click", () => { if (currentRowCount >= PAGE_SIZE) loadPage(currentPage + 1); });
+document.getElementById("refreshBtn").addEventListener("click", () => { refreshStats().catch(() => {}); loadPage(currentPage); });
+document.getElementById("refreshBtn2").addEventListener("click", () => { refreshStats().catch(() => {}); loadPage(0); });
+statusFilter.addEventListener("change", () => loadPage(0));
+searchInput.addEventListener("input", () => {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => loadPage(0), 300);
+});
+
+// ---------- New-key modal ----------
+const newKeyModal = document.getElementById("newKeyModal");
+const newKeyNote = document.getElementById("newKeyNote");
+const newKeyResult = document.getElementById("newKeyResult");
+
+function openNewKeyModal() {
+  newKeyNote.value = "";
+  newKeyResult.innerHTML = "";
+  newKeyModal.classList.remove("hidden");
+  newKeyNote.focus();
+}
+function closeNewKeyModal() {
+  newKeyModal.classList.add("hidden");
+  refreshStats().catch(() => {});
+  loadPage(0);
+}
+
+document.getElementById("newKeyBtn").addEventListener("click", openNewKeyModal);
+document.getElementById("newKeyCancel").addEventListener("click", closeNewKeyModal);
+newKeyModal.addEventListener("click", (e) => { if (e.target === newKeyModal) closeNewKeyModal(); });
+
+document.getElementById("newKeyCreate").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const created = await api("/admin/licenses", {
+      method: "POST",
+      body: JSON.stringify({ note: newKeyNote.value.trim() || undefined }),
+    });
+    newKeyResult.innerHTML = `New key: <span class="key-chip" data-copy-key="${created.license_key}" title="Click to copy">${created.license_key}</span>`;
+    newKeyResult.classList.add("new-key-result");
+    newKeyResult.querySelector("[data-copy-key]").addEventListener("click", (ev) => copyKey(ev.target.dataset.copyKey));
+    toast("Key created.");
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---------- Boot ----------
+(function boot() {
+  const saved = getSecret();
+  if (saved) {
+    tryUnlock(saved);
+  } else {
+    showGate();
+  }
+})();
+</script>
+</body>
+</html>
