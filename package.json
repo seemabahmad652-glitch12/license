@@ -1,0 +1,18 @@
+{
+  "name": "afkstrike-license-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Custom, self-hosted license server for afkstrike - replaces the KeyAuth-backed gate with one Postgres-backed /verify endpoint plus admin routes to create/revoke/reset keys. See README.md in this folder.",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}
