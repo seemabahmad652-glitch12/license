@@ -1025,6 +1025,105 @@ app.delete("/admin/licenses/:key", adminLimiter, requireAdminSecret, ah(async (r
   res.json({ ok: true });
 }));
 
+// ---------- Bulk actions ----------
+// One action applied to many keys at once, from the dashboard's selection
+// bar. Each is a single statement that changes the keys *and* records an
+// event per changed key, same as the one-key routes, so history can't
+// come apart from what happened. Keys already in the target state are
+// skipped (not re-recorded), which is why the reply says how many
+// actually changed.
+const BULK_MAX = 200;
+const BULK_SIMPLE = {
+  revoke: {
+    sql: `UPDATE licenses SET status = 'revoked' WHERE license_key = ANY($1::text[]) AND status <> 'revoked' RETURNING license_key`,
+    event: "revoked",
+  },
+  reactivate: {
+    sql: `UPDATE licenses SET status = 'active' WHERE license_key = ANY($1::text[]) AND status <> 'active' RETURNING license_key`,
+    event: "reactivated",
+  },
+  delete: {
+    sql: `DELETE FROM licenses WHERE license_key = ANY($1::text[]) RETURNING license_key`,
+    event: "deleted",
+  },
+};
+
+app.post("/admin/licenses/bulk", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+  const body = req.body || {};
+  const keys = Array.isArray(body.keys) ? [...new Set(body.keys)] : null;
+  if (!keys || keys.length === 0 || keys.length > BULK_MAX ||
+      keys.some((k) => typeof k !== "string" || k.length === 0 || k.length > 64)) {
+    return res.status(400).json({ error: `keys must be a list of 1-${BULK_MAX} license keys.` });
+  }
+  const action = String(body.action || "");
+  let changed;
+  if (BULK_SIMPLE[action]) {
+    const { sql, event } = BULK_SIMPLE[action];
+    changed = await mutateAndLog(req, sql, [keys], event);
+  } else if (action === "extend") {
+    const days = Number(body.days);
+    if (!Number.isInteger(days) || days < 1 || days > 3650) {
+      return res.status(400).json({ error: "days must be a whole number from 1 to 3650." });
+    }
+    // Never-expiring keys are left alone, exactly as the one-key route.
+    changed = await mutateAndLog(
+      req,
+      `UPDATE licenses SET expires_at = GREATEST(expires_at, now()) + make_interval(days => $2::int)
+        WHERE license_key = ANY($1::text[]) AND expires_at IS NOT NULL
+       RETURNING license_key`,
+      [keys, days],
+      "extended",
+      `+${days} days`
+    );
+  } else if (action === "reset-hwid") {
+    const { rows } = await pool.query(
+      `WITH m AS (
+         UPDATE licenses l SET hwid = NULL
+           FROM (SELECT id, hwid AS old_hwid FROM licenses
+                  WHERE license_key = ANY($1::text[]) AND hwid IS NOT NULL) prev
+          WHERE l.id = prev.id
+          RETURNING l.license_key, prev.old_hwid
+       )
+       INSERT INTO license_events (license_key, event, detail, ip, hwid)
+       SELECT license_key, 'device_reset', NULL, $2, old_hwid FROM m
+       RETURNING license_key`,
+      [keys, clientIp(req)]
+    );
+    changed = rows.length;
+  } else {
+    return res.status(400).json({ error: "action must be revoke, reactivate, extend, reset-hwid or delete." });
+  }
+  res.json({ ok: true, requested: keys.length, changed });
+}));
+
+// ---------- Activity by day ----------
+// For the dashboard's chart: keys created, first activations and refused
+// checks per day (UTC), oldest first, with empty days included as zeros.
+app.get("/admin/stats/daily", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+  const days = Math.min(90, Math.max(7, parseInt(req.query.days, 10) || 14));
+  const { rows } = await pool.query(
+    `WITH d AS (
+       SELECT generate_series(current_date - ($1::int - 1), current_date, interval '1 day')::date AS day
+     ), e AS (
+       -- From the history, not the licenses table, so a key that was
+       -- later deleted still counts on the day it was made.
+       SELECT created_at::date AS day,
+              count(*) FILTER (WHERE event = 'created') AS c,
+              count(*) FILTER (WHERE event = 'activated') AS a,
+              count(*) FILTER (WHERE event LIKE 'rejected%') AS r
+         FROM license_events WHERE created_at >= current_date - ($1::int - 1) GROUP BY 1
+     )
+     SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
+            COALESCE(e.c, 0)::int AS created,
+            COALESCE(e.a, 0)::int AS activations,
+            COALESCE(e.r, 0)::int AS rejections
+       FROM d LEFT JOIN e USING (day)
+      ORDER BY d.day`,
+    [days]
+  );
+  res.json(rows);
+}));
+
 // Last-resort handler: anything that throws inside a route above
 // (a Postgres hiccup, etc.) lands here instead of taking the whole
 // process down or leaking a stack trace to the caller.

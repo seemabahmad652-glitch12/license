@@ -217,6 +217,40 @@ async function main() {
     for (let i = 0; i < 32; i++) if ((await verify("AAAAA-BBBBB-CCCCC-DDDDD", "x", {}, `${i}.${i}.${i}.${i}, 198.51.100.7`)).status === 429) spoofed++;
     check("a spoofed left-most X-Forwarded-For doesn't evade it", spoofed === 2, spoofed);
 
+    section("Bulk actions");
+    const made = (await admin("POST", "/admin/licenses", { count: 4, expires_in_days: 10 })).body.created.map((l) => l.license_key);
+    const lifetime = (await admin("POST", "/admin/licenses", {})).body.license_key;
+    let br = await admin("POST", "/admin/licenses/bulk", { action: "revoke", keys: [...made, made[0]] });
+    check("bulk revoke changes each key once (duplicates ignored)", br.status === 200 && br.body.changed === 4 && br.body.requested === 4, br.body);
+    br = await admin("POST", "/admin/licenses/bulk", { action: "revoke", keys: made });
+    check("already-revoked keys are skipped", br.body.changed === 0);
+    check("revoked keys refuse to verify", (await verify(made[1], "bulk-dev")).body.success === false);
+    br = await admin("POST", "/admin/licenses/bulk", { action: "reactivate", keys: made });
+    check("bulk reactivate", br.body.changed === 4 && (await verify(made[1], "bulk-dev")).body.success === true);
+    const expBefore = (await admin("GET", `/admin/licenses?q=${made[2]}`)).body[0].expires_at;
+    br = await admin("POST", "/admin/licenses/bulk", { action: "extend", days: 30, keys: [made[2], lifetime] });
+    const expAfter = (await admin("GET", `/admin/licenses?q=${made[2]}`)).body[0].expires_at;
+    check("bulk extend adds 30 days and skips a never-expiring key",
+      br.body.changed === 1 && Math.round((new Date(expAfter) - new Date(expBefore)) / 86400000) === 30, { b: br.body, expBefore, expAfter });
+    br = await admin("POST", "/admin/licenses/bulk", { action: "reset-hwid", keys: made });
+    check("bulk reset only touches bound keys", br.body.changed === 1);
+    const evs = (await admin("GET", `/admin/licenses/${made[1]}/events`)).body.map((e) => e.event);
+    check("bulk changes are in each key's history", ["revoked", "reactivated", "device_reset"].every((e) => evs.includes(e)), evs);
+    br = await admin("POST", "/admin/licenses/bulk", { action: "ban", keys: made });
+    check("unknown bulk action refused", br.status === 400);
+    br = await admin("POST", "/admin/licenses/bulk", { action: "revoke", keys: [] });
+    check("empty key list refused", br.status === 400);
+    br = await admin("POST", "/admin/licenses/bulk", { action: "revoke", keys: Array.from({ length: 201 }, (_, i) => `K${i}`) });
+    check("more than 200 keys refused", br.status === 400);
+    br = await admin("POST", "/admin/licenses/bulk", { action: "delete", keys: [made[3]] });
+    check("bulk delete keeps history", br.body.changed === 1 && (await admin("GET", `/admin/licenses/${made[3]}/events`)).body[0].event === "deleted");
+
+    section("Activity by day");
+    const daily = (await admin("GET", "/admin/stats/daily?days=14")).body;
+    check("14 days, oldest first, today last", Array.isArray(daily) && daily.length === 14 && daily[13].day === new Date().toISOString().slice(0, 10), daily.slice(-2));
+    check("today counts keys created and activations", daily[13].created >= 5 && daily[13].activations >= 1, daily[13]);
+    check("days clamp to 7..90", (await admin("GET", "/admin/stats/daily?days=2")).body.length === 7 && (await admin("GET", "/admin/stats/daily?days=500")).body.length === 90);
+
     section("Compression and caching");
     const raw = (p, headers = {}) => new Promise((resolve, reject) => {
       require("http").get(`${BASE}${p}`, { headers }, (r) => {

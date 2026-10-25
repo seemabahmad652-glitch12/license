@@ -446,6 +446,63 @@
   .feed .timeline { max-height: 360px; }
   .muted-line { color: var(--faint); font-size: 13px; padding: 14px 0; }
 
+  /* ---------- Activity chart ---------- */
+  .chart-card {
+    border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--surface);
+    padding: 18px 22px 14px; margin-bottom: 20px;
+  }
+  .chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .chart-head h2 { font-size: 14.5px; margin: 0; font-weight: 600; }
+  .chart-sum { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--dim); }
+  .chart-sum b { color: var(--text); font-weight: 600; }
+  .chart-sum i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+  .chart-sum .k-act i { background: var(--ok); }
+  .chart-sum .k-new i { background: var(--accent); }
+  .chart-sum .k-rej i { background: var(--bad); }
+  .chart { display: grid; grid-template-columns: repeat(var(--n, 14), minmax(0, 1fr)); gap: 6px; align-items: end; height: 120px; }
+  .chart-day { position: relative; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; gap: 2px; cursor: default; }
+  .chart-bars { display: flex; align-items: flex-end; justify-content: center; gap: 2px; width: 100%; height: calc(100% - 18px); }
+  .chart-bars span { width: min(10px, 32%); border-radius: 3px 3px 1px 1px; min-height: 2px; transition: height 0.4s var(--ease); }
+  .chart-bars .b-act { background: var(--ok); }
+  .chart-bars .b-new { background: var(--accent); opacity: 0.85; }
+  .chart-bars .b-rej { background: var(--bad); opacity: 0.85; }
+  .chart-bars span.zero { opacity: 0.18; }
+  .chart-day:hover .chart-bars span { filter: brightness(1.25); }
+  .chart-lbl { font-size: 10.5px; color: var(--faint); white-space: nowrap; }
+  .chart-day.today .chart-lbl { color: var(--text); font-weight: 600; }
+
+  /* ---------- Selection + bulk bar ---------- */
+  .sel-col { width: 36px; padding-right: 0 !important; }
+  .sel-box { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; margin: 0; vertical-align: middle; }
+  tbody tr.selected { background: rgba(124, 92, 252, 0.08); }
+  .bulk-bar {
+    position: sticky; top: 10px; z-index: 5; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 14px; margin-bottom: 12px; border-radius: var(--r-lg);
+    background: linear-gradient(90deg, rgba(124, 92, 252, 0.22), rgba(124, 92, 252, 0.1)); border: 1px solid rgba(124, 92, 252, 0.5);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  }
+  .bulk-bar .bulk-count { font-size: 13px; color: var(--text); margin-right: 6px; }
+  .bulk-bar .bulk-count b { font-weight: 700; }
+  .bulk-bar button { padding: 7px 11px; font-size: 12.5px; }
+  .bulk-bar .spacer { flex: 1; }
+  .bulk-bar .danger { color: var(--bad); }
+
+  /* ---------- Auto-refresh ---------- */
+  .auto-btn {
+    display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 12px;
+    background: var(--surface-2); border: 1px solid var(--line); color: var(--dim); font-size: 12.5px;
+  }
+  .auto-btn .auto-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .auto-btn.on { color: var(--text); border-color: rgba(52, 211, 153, 0.45); }
+  .auto-btn.on .auto-dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .updated-ago { font-size: 12px; color: var(--faint); white-space: nowrap; }
+  .shortcuts { margin-top: 18px; text-align: center; font-size: 12px; color: var(--faint); }
+  .shortcuts kbd {
+    display: inline-block; min-width: 18px; padding: 1px 6px; margin: 0 2px; border-radius: 5px;
+    font: 600 11px/1.5 ui-monospace, monospace; color: var(--dim); background: var(--surface-2); border: 1px solid var(--line);
+  }
+  @media (max-width: 640px) { .updated-ago { display: none; } }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
   }
@@ -475,6 +532,8 @@
         </div>
       </div>
       <div class="topbar-actions">
+        <span class="updated-ago" id="updatedAgo"></span>
+        <button type="button" class="auto-btn" id="autoBtn" title="Refresh everything every 30 seconds" aria-pressed="false"><span class="auto-dot"></span>Auto-refresh</button>
         <span class="host-pill" id="hostPill"></span>
         <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
@@ -498,7 +557,9 @@
       <div class="legend">
         <div class="legend-item"><span class="dot dot-active"></span><b class="tnum" id="statActive">-</b> active</div>
         <div class="legend-item"><span class="dot dot-revoked"></span><b class="tnum" id="statRevoked">-</b> revoked</div>
-        <div class="legend-item"><span class="dot dot-banned"></span><b class="tnum" id="statBanned">-</b> banned</div>
+        <!-- Banning is gone from the dashboard (Revoke does the same job);
+             this only shows while older banned keys still exist. -->
+        <div class="legend-item hidden" id="legendBanned"><span class="dot dot-banned"></span><b class="tnum" id="statBanned">-</b> banned</div>
         <div class="legend-item"><span class="dot dot-expired"></span><b class="tnum" id="statExpired">-</b> expired</div>
         <div class="legend-item"><span class="dot dot-bound"></span><b class="tnum" id="statBound">-</b> bound to a device</div>
       </div>
@@ -527,16 +588,24 @@
       </div>
     </div>
 
+    <div class="chart-card">
+      <div class="chart-head">
+        <h2>Last 14 days</h2>
+        <div class="chart-sum" id="chartSum"></div>
+      </div>
+      <div class="chart" id="chart" aria-label="Activity per day"></div>
+    </div>
+
     <div class="toolbar">
       <div class="search-wrap">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-        <input type="text" id="searchInput" placeholder="Search key, device or IP" />
+        <input type="text" id="searchInput" placeholder="Search key, device or IP   ( / )" />
       </div>
       <select id="statusFilter" aria-label="Filter by status">
         <option value="">All keys</option>
         <option value="active">Active</option>
         <option value="revoked">Revoked</option>
-        <option value="banned">Banned</option>
+        <option value="banned" id="optBanned" hidden>Banned</option>
         <option value="expired">Expired</option>
         <option value="expiring">Expiring soon</option>
         <option value="online">Online now</option>
@@ -547,10 +616,23 @@
       <button class="btn-accent" id="newKeyBtn">New key</button>
     </div>
 
+    <div class="bulk-bar hidden" id="bulkBar" role="toolbar" aria-label="Selected keys">
+      <span class="bulk-count"><b id="bulkCount">0</b> selected</span>
+      <button type="button" class="btn-ghost" data-bulk="copy">Copy keys</button>
+      <button type="button" class="btn-ghost" data-bulk="revoke">Revoke</button>
+      <button type="button" class="btn-ghost" data-bulk="reactivate">Reactivate</button>
+      <button type="button" class="btn-ghost" data-bulk="extend-30">Extend +30 days</button>
+      <button type="button" class="btn-ghost" data-bulk="reset-hwid">Reset device</button>
+      <button type="button" class="btn-ghost danger" data-bulk="delete">Delete</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn-ghost" data-bulk="clear">Clear</button>
+    </div>
+
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
+            <th class="sel-col"><input type="checkbox" class="sel-box" id="selectAll" title="Select every key on this page" aria-label="Select all on this page" /></th>
             <th>Key</th>
             <th class="col-status">Status</th>
             <th class="col-device">Device</th>
@@ -580,6 +662,7 @@
       </div>
       <div class="timeline" id="feed"></div>
     </div>
+    <div class="shortcuts"><kbd>/</kbd> search &nbsp; <kbd>N</kbd> new key &nbsp; <kbd>R</kbd> refresh &nbsp; <kbd>Esc</kbd> close</div>
   </div>
 
   <div class="modal-overlay hidden" id="newKeyModal">
@@ -718,6 +801,10 @@ async function tryUnlock(secret) {
   appEl.classList.remove("hidden");
   document.getElementById("hostPill").textContent = location.host;
   loadPage(0);
+  loadChart();
+  let auto = false;
+  try { auto = localStorage.getItem(AUTO_KEY) === "1"; } catch { /* private window */ }
+  setAuto(auto);
 }
 
 document.getElementById("gateSubmit").addEventListener("click", () => {
@@ -752,6 +839,8 @@ async function refreshStats() {
   document.getElementById("segActive").style.width = `${pct(s.active)}%`;
   document.getElementById("segRevoked").style.width = `${pct(s.revoked)}%`;
   document.getElementById("segBanned").style.width = `${pct(s.banned)}%`;
+  document.getElementById("legendBanned").classList.toggle("hidden", !s.banned);
+  document.getElementById("optBanned").hidden = !s.banned;
 
   // `?? 0` so this still paints against an older server that predates
   // these fields, rather than showing "undefined".
@@ -945,11 +1034,16 @@ function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-async function loadPage(page) {
+async function loadPage(page, { quiet = false } = {}) {
+  // A different page or filter starts a fresh selection; a quiet reload
+  // (auto-refresh, after an action) keeps it.
+  if (!quiet && page !== currentPage) selected.clear();
   currentPage = page;
-  loadingEl.classList.remove("hidden");
-  emptyEl.classList.add("hidden");
-  rowsEl.innerHTML = "";
+  if (!quiet) {
+    loadingEl.classList.remove("hidden");
+    emptyEl.classList.add("hidden");
+    rowsEl.innerHTML = "";
+  }
 
   const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
   if (statusFilter.value) params.set("status", statusFilter.value);
@@ -965,12 +1059,16 @@ async function loadPage(page) {
   }
   loadingEl.classList.add("hidden");
   currentRowCount = rows.length;
+  if (quiet) rowsEl.innerHTML = "";
   renderRows(rows);
+  markUpdated();
   updatePagination();
 }
 
 function renderRows(rows) {
   if (rows.length === 0) {
+    rowsByKey = new Map();
+    paintSelection();
     const filtered = statusFilter.value || searchInput.value.trim();
     emptyEl.innerHTML = filtered
       ? "<b>Nothing matches this filter</b>Clear the search or pick a different status."
@@ -988,6 +1086,14 @@ function renderRows(rows) {
   rowsEl.querySelectorAll("[data-action]").forEach((btn) => {
     btn.addEventListener("click", () => runAction(btn.dataset.action, btn.dataset.key, btn));
   });
+  rowsEl.querySelectorAll("[data-select]").forEach((box) => {
+    box.addEventListener("change", () => {
+      if (box.checked) selected.add(box.dataset.select); else selected.delete(box.dataset.select);
+      box.closest("tr").classList.toggle("selected", box.checked);
+      paintSelection();
+    });
+  });
+  paintSelection();
   rowsEl.querySelectorAll("[data-more]").forEach((btn) => {
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -1031,8 +1137,9 @@ function openRowMenu(anchor, key, row) {
   sep0.className = "sep";
   menu.appendChild(sep0);
   if (row && row.hwid) add("Reset device", () => runAction("reset-hwid", key, anchor));
-  if (row && row.status === "banned") add("Unban key", () => runAction("unban", key, anchor));
-  else add("Ban key", () => runAction("ban", key, anchor), true);
+  // No "Ban": Revoke does the same job. A key banned before that change
+  // can still be brought back.
+  if (row && row.status === "banned") add("Reactivate key", () => runAction("unban", key, anchor));
 
   const sep = document.createElement("div");
   sep.className = "sep";
@@ -1085,7 +1192,8 @@ function rowHtml(row) {
   const moreBtn = `<button class="row-more" data-more="${key}" title="More actions" aria-label="More actions">&#x22EF;</button>`;
 
   return `
-    <tr>
+    <tr class="${selected.has(row.license_key) ? "selected" : ""}">
+      <td class="sel-col"><input type="checkbox" class="sel-box" data-select="${key}" aria-label="Select ${key}" ${selected.has(row.license_key) ? "checked" : ""} /></td>
       <td><span class="key-chip" data-copy-key="${key}" title="Click to copy">${key}</span></td>
       <td class="col-status"><div class="status-cell">${statusPill}${expiredPill}</div></td>
       <td class="col-device">${hwidCell}</td>
@@ -1106,8 +1214,7 @@ function copyKey(key) {
 async function runAction(action, key, btn) {
   if (action === "expiry") { openExpiryModal(key); return; }
 
-  if ((action === "delete" || action === "ban") &&
-      !confirm(`${action === "delete" ? "Permanently delete" : "Ban"} license ${key}?`)) {
+  if (action === "delete" && !confirm(`Permanently delete license ${key}?`)) {
     return;
   }
   btn.disabled = true;
@@ -1117,7 +1224,7 @@ async function runAction(action, key, btn) {
       toast("Key deleted.");
     } else {
       await api(`/admin/licenses/${encodeURIComponent(key)}/${action}`, { method: "POST" });
-      toast(`Key ${action.replace("-", " ")}d.`);
+      toast({ revoke: "Key revoked.", unrevoke: "Key reactivated.", unban: "Key reactivated.", "reset-hwid": "Device reset." }[action] || "Done.");
     }
     refreshStats().catch(() => {});
     loadPage(currentPage);
@@ -1154,12 +1261,156 @@ function updatePagination() {
 
 document.getElementById("prevPageBtn").addEventListener("click", () => { if (currentPage > 0) loadPage(currentPage - 1); });
 document.getElementById("nextPageBtn").addEventListener("click", () => { if (currentRowCount >= PAGE_SIZE) loadPage(currentPage + 1); });
-document.getElementById("refreshBtn").addEventListener("click", () => { refreshStats().catch(() => {}); loadPage(currentPage); });
-document.getElementById("refreshBtn2").addEventListener("click", () => { refreshStats().catch(() => {}); loadPage(0); });
-statusFilter.addEventListener("change", () => loadPage(0));
+document.getElementById("refreshBtn").addEventListener("click", refreshAll);
+document.getElementById("refreshBtn2").addEventListener("click", refreshAll);
+statusFilter.addEventListener("change", () => { selected.clear(); loadPage(0); });
 searchInput.addEventListener("input", () => {
   clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(() => loadPage(0), 300);
+  searchDebounce = setTimeout(() => { selected.clear(); loadPage(0); }, 300);
+});
+
+// ---------- Selection + bulk actions ----------
+const selected = new Set();
+const bulkBar = document.getElementById("bulkBar");
+const selectAllBox = document.getElementById("selectAll");
+
+function paintSelection() {
+  const onPage = [...rowsByKey.keys()];
+  const picked = onPage.filter((k) => selected.has(k)).length;
+  selectAllBox.checked = onPage.length > 0 && picked === onPage.length;
+  selectAllBox.indeterminate = picked > 0 && picked < onPage.length;
+  document.getElementById("bulkCount").textContent = String(selected.size);
+  bulkBar.classList.toggle("hidden", selected.size === 0);
+}
+
+selectAllBox.addEventListener("change", () => {
+  for (const k of rowsByKey.keys()) {
+    if (selectAllBox.checked) selected.add(k); else selected.delete(k);
+  }
+  rowsEl.querySelectorAll("[data-select]").forEach((b) => {
+    b.checked = selected.has(b.dataset.select);
+    b.closest("tr").classList.toggle("selected", b.checked);
+  });
+  paintSelection();
+});
+
+const BULK_DONE = {
+  revoke: (n) => `${n} key${n === 1 ? "" : "s"} revoked.`,
+  reactivate: (n) => `${n} key${n === 1 ? "" : "s"} reactivated.`,
+  extend: (n) => `${n} key${n === 1 ? "" : "s"} extended by 30 days.`,
+  "reset-hwid": (n) => `${n} device${n === 1 ? "" : "s"} reset.`,
+  delete: (n) => `${n} key${n === 1 ? "" : "s"} deleted.`,
+};
+
+bulkBar.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-bulk]");
+  if (!btn) return;
+  const what = btn.dataset.bulk;
+  const keys = [...selected];
+  if (what === "clear") { selected.clear(); renderRows([...rowsByKey.values()]); return; }
+  if (what === "copy") {
+    navigator.clipboard?.writeText(keys.join("\n")).then(
+      () => toast(`${keys.length} key${keys.length === 1 ? "" : "s"} copied.`),
+      () => toast("Couldn't copy.", "err"));
+    return;
+  }
+  const action = what === "extend-30" ? "extend" : what;
+  if (action === "delete" && !confirm(`Permanently delete ${keys.length} key${keys.length === 1 ? "" : "s"}? Their history is kept.`)) return;
+  if (action === "revoke" && keys.length > 1 && !confirm(`Revoke ${keys.length} keys? They stop working at their next check (within 5 minutes).`)) return;
+  bulkBar.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  try {
+    const r = await api("/admin/licenses/bulk", {
+      method: "POST",
+      body: JSON.stringify({ action, keys, ...(action === "extend" ? { days: 30 } : {}) }),
+    });
+    const skipped = r.requested - r.changed;
+    toast(BULK_DONE[action](r.changed) + (skipped ? ` ${skipped} already were, or didn't apply.` : ""));
+    if (action === "delete") selected.clear();
+    refreshAll();
+  } catch (err) {
+    if (err.message !== "unauthorized") toast(err.message, "err");
+  } finally {
+    bulkBar.querySelectorAll("button").forEach((b) => (b.disabled = false));
+  }
+});
+
+// ---------- Activity chart ----------
+async function loadChart() {
+  let days;
+  try { days = await api("/admin/stats/daily?days=14"); } catch { return; }
+  const chart = document.getElementById("chart");
+  const max = Math.max(1, ...days.flatMap((d) => [d.activations, d.created, d.rejections]));
+  const today = new Date().toISOString().slice(0, 10);
+  chart.style.setProperty("--n", String(days.length));
+  chart.innerHTML = days.map((d) => {
+    const h = (n) => `${Math.max(2, (n / max) * 100)}%`;
+    const dt = new Date(`${d.day}T00:00:00Z`);
+    const label = dt.toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" });
+    const tip = `${label}: ${d.activations} activation${d.activations === 1 ? "" : "s"}, ${d.created} key${d.created === 1 ? "" : "s"} created, ${d.rejections} refused`;
+    return `<div class="chart-day${d.day === today ? " today" : ""}" title="${escapeHtml(tip)}">
+      <div class="chart-bars">
+        <span class="b-act${d.activations ? "" : " zero"}" style="height:${h(d.activations)}"></span>
+        <span class="b-new${d.created ? "" : " zero"}" style="height:${h(d.created)}"></span>
+        <span class="b-rej${d.rejections ? "" : " zero"}" style="height:${h(d.rejections)}"></span>
+      </div>
+      <span class="chart-lbl">${escapeHtml(d.day === today ? "Today" : dt.toLocaleDateString(undefined, { day: "numeric", timeZone: "UTC" }))}</span>
+    </div>`;
+  }).join("");
+  const sum = (k) => days.reduce((a, d) => a + d[k], 0);
+  const plural = (n, one, many) => `<b>${n}</b> ${n === 1 ? one : many}`;
+  document.getElementById("chartSum").innerHTML =
+    `<span class="k-act"><i></i>${plural(sum("activations"), "activation", "activations")}</span>` +
+    `<span class="k-new"><i></i>${plural(sum("created"), "key created", "keys created")}</span>` +
+    `<span class="k-rej"><i></i>${plural(sum("rejections"), "refused check", "refused checks")}</span>`;
+}
+
+// ---------- Refresh: manual, auto, "updated Xs ago" ----------
+let lastUpdated = 0;
+function markUpdated() { lastUpdated = Date.now(); paintUpdated(); }
+function paintUpdated() {
+  const el = document.getElementById("updatedAgo");
+  if (!lastUpdated) { el.textContent = ""; return; }
+  const s = Math.round((Date.now() - lastUpdated) / 1000);
+  el.textContent = s < 5 ? "Updated just now" : s < 60 ? `Updated ${s}s ago` : `Updated ${Math.floor(s / 60)}m ago`;
+}
+setInterval(paintUpdated, 5000);
+
+function refreshAll() {
+  refreshStats().catch(() => {});
+  loadChart();
+  loadPage(currentPage, { quiet: true });
+}
+
+const AUTO_KEY = "afk-admin-auto";
+let autoTimer = null;
+function anyModalOpen() {
+  return !!document.querySelector(".modal-overlay:not(.hidden)") || !!openMenuEl;
+}
+function setAuto(on) {
+  const btn = document.getElementById("autoBtn");
+  btn.classList.toggle("on", on);
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  try { localStorage.setItem(AUTO_KEY, on ? "1" : "0"); } catch { /* private window */ }
+  clearInterval(autoTimer);
+  autoTimer = on ? setInterval(() => {
+    // Never while something is being edited, read or picked.
+    if (document.hidden || appEl.classList.contains("hidden") || anyModalOpen() ||
+        selected.size > 0 || document.activeElement === searchInput) return;
+    refreshAll();
+  }, 30000) : null;
+}
+document.getElementById("autoBtn").addEventListener("click", () =>
+  setAuto(!document.getElementById("autoBtn").classList.contains("on")));
+
+// Keyboard: / search, N new key, R refresh - not while typing.
+document.addEventListener("keydown", (e) => {
+  if (appEl.classList.contains("hidden") || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+  if (anyModalOpen()) return;
+  if (e.key === "/") { e.preventDefault(); searchInput.focus(); searchInput.select(); }
+  else if (e.key === "n" || e.key === "N") { e.preventDefault(); document.getElementById("newKeyBtn").click(); }
+  else if (e.key === "r" || e.key === "R") { e.preventDefault(); refreshAll(); }
 });
 
 // ---------- Duration picker ----------

@@ -418,8 +418,8 @@ open `https://license.lootbloxy.com/` (or your Railway URL) in a
 browser and it's right there. It drives the exact same `/admin/*`
 routes documented below, just with buttons instead of curl:
 
-- **Overview** - the key population as one bar (active/revoked/
-  banned) plus health tiles: online now, expiring within 7 days, never
+- **Overview** - the key population as one bar (active/revoked;
+  banned only appears while an older banned key exists) plus health tiles: online now, expiring within 7 days, never
   used, activations and wrong-device attempts in the last 24 hours.
   Each tile is also a shortcut to that filter on the table.
 - **Search + filter** - search by key, device digest or IP; filter by
@@ -428,7 +428,20 @@ routes documented below, just with buttons instead of curl:
   **Download .txt** (one key per line, ready to paste into Discord).
 - **Per-key actions** - Revoke/Unrevoke and Expiry inline; History,
   Extend +30 days / +1 year (only offered for keys that expire), Reset
-  device, Ban/Unban and Delete behind the ⋯ menu.
+  device and Delete behind the ⋯ menu. **No Ban** - Revoke does the same
+  job; a key banned before that change shows "Reactivate key" instead.
+- **Select several keys** (checkboxes, or the header box for the whole
+  page) and act on them at once: Copy keys, Revoke, Reactivate, Extend
+  +30 days, Reset device, Delete - via `POST /admin/licenses/bulk`. The
+  toast says how many changed and how many were skipped (already in that
+  state, never-expiring, unbound).
+- **Last 14 days** chart - activations, keys created and refused checks
+  per day (`GET /admin/stats/daily`), from the history so deleted keys
+  still count; hover a day for its numbers.
+- **Auto-refresh** (top right, remembered per browser) - every 30 s,
+  paused while a dialog is open, keys are selected or you're typing in
+  search. "Updated Xs ago" beside it.
+- **Shortcuts** - `/` search, `N` new key, `R` refresh, `Esc` close.
 - **Key history** - a timeline of everything that happened to a key.
 - **Recent activity** - the same timeline across every key.
 - **Export CSV** - whatever the current filter and search show.
@@ -518,10 +531,9 @@ curl -X POST https://license.lootbloxy.com/admin/licenses/XXXXX-XXXXX-XXXXX-XXXX
   -H "X-Admin-Secret: $ADMIN_SECRET"
 ```
 
-**Ban a key** (same effect on `/verify` as revoke - rejected either
-way - but its own status and its own rejection message, for a harder,
-more deliberate block like abuse or a shared/leaked key rather than an
-ordinary refund):
+**Ban a key** - still accepted by the API for compatibility, but no
+longer offered in the dashboard: revoke does the same job (`/verify`
+rejects either way). Only its rejection message differs:
 ```bash
 curl -X POST https://license.lootbloxy.com/admin/licenses/XXXXX-XXXXX-XXXXX-XXXXX/ban \
   -H "X-Admin-Secret: $ADMIN_SECRET"
@@ -533,6 +545,20 @@ has a route of its own name to call):
 ```bash
 curl -X POST https://license.lootbloxy.com/admin/licenses/XXXXX-XXXXX-XXXXX-XXXXX/unban \
   -H "X-Admin-Secret: $ADMIN_SECRET"
+```
+
+**Act on many keys at once** (up to 200; `action` is `revoke`,
+`reactivate`, `extend` (with `days`), `reset-hwid` or `delete`; replies
+`{ ok, requested, changed }`, each changed key recorded in its history):
+```bash
+curl -X POST https://license.lootbloxy.com/admin/licenses/bulk \
+  -H "X-Admin-Secret: $ADMIN_SECRET" -H "Content-Type: application/json" \
+  -d '{"action":"extend","days":30,"keys":["AFK-AAAA-BBBB-CCCC","AFK-DDDD-EEEE-FFFF"]}'
+```
+
+**Activity per day** (`days` 7-90, default 14; UTC days, oldest first):
+```bash
+curl "https://license.lootbloxy.com/admin/stats/daily?days=30" -H "X-Admin-Secret: $ADMIN_SECRET"
 ```
 
 **Reset a key's bound device** (lets a customer activate on a new PC
