@@ -102,6 +102,55 @@ async function migrate() {
   // both the API and the dashboard before this.
   await pool.query(`ALTER TABLE licenses DROP COLUMN IF EXISTS note;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS licenses_expires_at_idx ON licenses (expires_at);`);
+  // For the dashboard's "online now" count and filter, which scans by
+  // recency of the last check-in.
+  await pool.query(`CREATE INDEX IF NOT EXISTS licenses_last_seen_idx ON licenses (last_seen_at DESC);`);
+
+  // Per-key history (58th pass). Answers the question every support
+  // conversation starts with - "it stopped working, what happened?" -
+  // which until now had no answer beyond a single last_seen timestamp.
+  //
+  // Keyed by the license *text*, deliberately with no foreign key to
+  // `licenses`: a key's history has to survive the key being deleted,
+  // because a chargeback or a "you deleted my key" dispute is exactly
+  // when you need to see it.
+  //
+  // Not every /verify is recorded - only the ones that change or refuse
+  // something (first activation, device migration, every rejection).
+  // A routine successful check-in happens every five minutes for every
+  // running install; logging those would bury the events that matter
+  // under millions that don't, and `last_seen_at` already records them.
+  // Pruned after EVENT_RETENTION_DAYS - see pruneEvents below.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS license_events (
+      id BIGSERIAL PRIMARY KEY,
+      license_key TEXT NOT NULL,
+      event TEXT NOT NULL,
+      detail TEXT,
+      ip TEXT,
+      hwid TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS license_events_key_idx ON license_events (license_key, created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS license_events_created_idx ON license_events (created_at DESC);`);
+}
+
+// How long per-key history is kept. Long enough to cover a chargeback
+// window (typically 120 days) with room to spare.
+const EVENT_RETENTION_DAYS = 180;
+
+async function pruneEvents() {
+  try {
+    await pool.query(
+      `DELETE FROM license_events WHERE created_at < now() - make_interval(days => $1::int)`,
+      [EVENT_RETENTION_DAYS]
+    );
+  } catch (e) {
+    // A failed prune just means the table is a little bigger until the
+    // next one - never worth taking the server down over.
+    console.error("Event prune failed:", e);
+  }
 }
 
 /// Resolves the expiry an admin request is asking for into either a
@@ -145,18 +194,34 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(da, db);
 }
 
-// Readable license keys: four groups of five, uppercase letters and
-// digits only, with visually-confusable characters (0/O, 1/I/L) left
-// out - the kind of string a person can type correctly from a screen
-// or read out loud, not a raw UUID.
+// Readable license keys, `AFK-XXXX-XXXX-XXXX` (59th pass): a fixed
+// brand prefix, then three groups of four from an alphabet with the
+// visually-confusable characters (0/O, 1/I/L) left out - the kind of
+// string a person can type correctly from a screen or read out loud.
+//
+// The prefix carries no entropy; the 12 random characters do: 31^12 is
+// about 7.9e17 keys. Against /verify's limit of 30 checks a minute per
+// address, guessing one is not a thing that happens.
+//
+// Keys issued before this were `XXXXX-XXXXX-XXXXX-XXXXX`. Those are NOT
+// migrated and keep working unchanged: /verify matches the stored key
+// string exactly and never parses its shape, so a key's format is only
+// ever decided here, at creation.
 const KEY_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const KEY_PREFIX = "AFK";
+const KEY_GROUPS = 3;
+const KEY_GROUP_LEN = 4;
+
+/// Uniform over the alphabet. `crypto.randomInt` rejection-samples
+/// internally; the previous `byte % 31` gave the first eight letters a
+/// slightly higher chance (256 isn't a multiple of 31) - harmless at
+/// this keyspace, but there was no reason to keep it.
 function generateLicenseKey() {
-  const groups = [];
-  for (let g = 0; g < 4; g++) {
+  const groups = [KEY_PREFIX];
+  for (let g = 0; g < KEY_GROUPS; g++) {
     let group = "";
-    const bytes = crypto.randomBytes(5);
-    for (let i = 0; i < 5; i++) {
-      group += KEY_ALPHABET[bytes[i] % KEY_ALPHABET.length];
+    for (let i = 0; i < KEY_GROUP_LEN; i++) {
+      group += KEY_ALPHABET[crypto.randomInt(KEY_ALPHABET.length)];
     }
     groups.push(group);
   }
@@ -363,6 +428,82 @@ function requireAdminSecret(req, res, next) {
   next();
 }
 
+// The whole /verify decision, as one statement - see the long comment
+// inside the route for how it works and why the race fix is subtle.
+// Lifted out to a constant so `checkVerifyStatement` below can have
+// Postgres plan the exact same text at startup.
+const VERIFY_SQL = `WITH found AS (
+       SELECT id, hwid, status, expires_at FROM licenses WHERE license_key = $1
+     ), upd AS (
+       UPDATE licenses l
+          SET last_seen_at = now(),
+              last_seen_ip = $3,
+              -- Always the NEW id, not COALESCE: this is both the
+              -- first-time bind and the legacy-to-fingerprint
+              -- migration, and after it the old value no longer
+              -- unlocks anything.
+              hwid = $2
+        WHERE l.id = (SELECT id FROM found)
+          AND l.status = 'active'
+          AND (l.expires_at IS NULL OR l.expires_at > now())
+          AND (l.hwid IS NULL OR l.hwid = $2 OR ($4 <> '' AND l.hwid = $4))
+       RETURNING l.id
+     ), outcome AS (
+       SELECT f.status,
+              (f.hwid IS NULL) AS was_unbound,
+              (f.expires_at IS NOT NULL AND f.expires_at <= now()) AS is_expired,
+              f.expires_at,
+              f.hwid AS prior_hwid,
+              (SELECT count(*) FROM upd)::int AS updated
+         FROM found f
+     ), classified AS (
+       -- Which event (if any) this check is worth recording. Computed
+       -- once, here, and the INSERT below filters on it being non-null -
+       -- so "should this be logged" and "what is logged" can never
+       -- disagree. (Repeating the conditions in a separate WHERE would
+       -- risk a NULL event slipping through, and a NOT NULL violation
+       -- would fail the whole statement - i.e. lock a customer out over
+       -- a logging bug.) Order matters: an expired key on the wrong
+       -- device is recorded as expired, matching the message returned.
+       SELECT o.*,
+              CASE
+                WHEN o.status <> 'active' THEN 'rejected_' || o.status
+                WHEN o.is_expired         THEN 'rejected_expired'
+                WHEN o.updated = 0        THEN 'rejected_device'
+                WHEN o.was_unbound        THEN 'activated'
+                WHEN $4 <> '' AND o.prior_hwid = $4 THEN 'migrated'
+              END AS event
+         FROM outcome o
+     ), ev AS (
+       -- A data-modifying CTE runs to completion whether or not the
+       -- final SELECT reads it, so this records the event without a
+       -- second round trip. An unknown key produces no row in "found"
+       -- and so is never recorded: anyone can send garbage keys, and
+       -- they should not be able to grow this table by doing so.
+       INSERT INTO license_events (license_key, event, ip, hwid)
+       SELECT $1, c.event, $3, $2 FROM classified c WHERE c.event IS NOT NULL
+       RETURNING 1
+     )
+     SELECT status, was_unbound, is_expired, expires_at, updated FROM classified`;
+
+/// Asks Postgres to *plan* the /verify statement before the server starts
+/// listening. EXPLAIN without ANALYZE checks syntax, names and types
+/// against the live schema without executing anything - so nothing is
+/// bound, updated or logged.
+///
+/// Why this exists: a SQL error in that statement is invisible until the
+/// first real activation, and then it locks out every customer at once.
+/// That isn't hypothetical - the 58th-pass rewrite of this statement had
+/// a doubled ")" that would have done exactly that, caught only because
+/// the test suite runs it. This makes the same mistake impossible to
+/// *deploy*: the process exits before listening, Railway's /health check
+/// never passes, and the previous deployment keeps serving. It also
+/// covers a difference between the Postgres the tests ran on and the one
+/// in production.
+async function checkVerifyStatement() {
+  await pool.query(`EXPLAIN ${VERIFY_SQL}`, ["", "", "", ""]);
+}
+
 // ---------- /verify - what the afkstrike desktop app actually calls ----------
 //
 // Body: { key: string, hwid: string }
@@ -373,8 +514,9 @@ function requireAdminSecret(req, res, next) {
 // client can't just claim a different hwid to get a second activation,
 // because THIS check is what decides, not anything the client sends
 // about its own state.
-// Longest value either field can legitimately be: a license key is 23
-// characters (four groups of five plus three hyphens) and a hwid is a
+// Longest value either field can legitimately be: a license key is at
+// most 23 characters (the older five-by-four format; current AFK- keys
+// are 18) and a hwid is a
 // 36-character UUID (see license.rs's `device_id`). Capped generously
 // rather than exactly, but capped - without this, a multi-kilobyte
 // "key" was handed straight to Postgres as a query parameter on an
@@ -434,32 +576,7 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   // used for one thing only: knowing which message to return.
   // `updated = 0` with a row present therefore means "the key exists
   // and is active, but this is the wrong device".
-  const { rows } = await pool.query(
-    `WITH found AS (
-       SELECT id, hwid, status, expires_at FROM licenses WHERE license_key = $1
-     ), upd AS (
-       UPDATE licenses l
-          SET last_seen_at = now(),
-              last_seen_ip = $3,
-              -- Always the NEW id, not COALESCE: this is both the
-              -- first-time bind and the legacy-to-fingerprint
-              -- migration, and after it the old value no longer
-              -- unlocks anything.
-              hwid = $2
-        WHERE l.id = (SELECT id FROM found)
-          AND l.status = 'active'
-          AND (l.expires_at IS NULL OR l.expires_at > now())
-          AND (l.hwid IS NULL OR l.hwid = $2 OR ($4 <> '' AND l.hwid = $4))
-       RETURNING l.id
-     )
-     SELECT f.status,
-            (f.hwid IS NULL) AS was_unbound,
-            (f.expires_at IS NOT NULL AND f.expires_at <= now()) AS is_expired,
-            f.expires_at,
-            (SELECT count(*) FROM upd)::int AS updated
-       FROM found f`,
-    [key, hwid, clientIp(req), legacyHwid]
-  );
+  const { rows } = await pool.query(VERIFY_SQL, [key, hwid, clientIp(req), legacyHwid]);
 
   const license = rows[0];
   if (!license) {
@@ -499,202 +616,343 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   // value is naturally kept fresh. null means the key never expires.
   return res.json({
     success: true,
-    message: "Device unlocked.",
+    // Was "Device unlocked." - reworded alongside the desktop app's
+    // unlock screen, which no longer frames this as a locked device but
+    // as entering a key to use the app.
+    message: "License activated.",
     expires_at: license.expires_at ? new Date(license.expires_at).toISOString() : null,
   });
 }));
 
 // ---------- Admin routes - never called by the desktop app itself ----------
-// Manage these with curl, Postman, a tiny internal tool, or a storefront's
-// own backend after a sale goes through - not meant to be exposed to
-// customers directly. All require X-Admin-Secret.
+// Manage these from the dashboard, curl, or a storefront's own backend
+// after a sale. All require X-Admin-Secret.
 
-// `note` was removed from this API in the 56th pass - it was never
-// used in practice and the dashboard no longer shows it. The database
-// column is deliberately left in place rather than dropped: dropping
-// it would irreversibly destroy any notes already stored. To actually
-// remove it, run `ALTER TABLE licenses DROP COLUMN note;` by hand once
-// you are sure nothing in there matters.
+/// Runs one UPDATE/DELETE ... RETURNING license_key and records an event
+/// for each row it touched - in a single statement, so a change and its
+/// history entry can never come apart (a change that "happened" with no
+/// record of it, or a record of a change that rolled back).
+///
+/// `mutationSql` must use $1..$n for its own `params` and must return
+/// `license_key`. Returns how many rows changed, so callers can 404.
+async function mutateAndLog(req, mutationSql, params, event, detail = null) {
+  const n = params.length;
+  const { rows } = await pool.query(
+    `WITH m AS (${mutationSql})
+     INSERT INTO license_events (license_key, event, detail, ip)
+     SELECT license_key, $${n + 1}, $${n + 2}, $${n + 3} FROM m
+     RETURNING license_key`,
+    [...params, event, detail, clientIp(req)]
+  );
+  return rows.length;
+}
+
+// Keys created per request. Enough to stock a Discord shop in one go,
+// small enough that a typo (an extra zero) can't mint ten thousand.
+const MAX_BULK = 100;
+
+// Creates one key, or `count` of them. Without `count` the response is
+// the single created row exactly as it always was, so existing scripts
+// keep working; with `count` it is `{ created: [...] }`.
+//
+// Bulk keys go in as one INSERT ... SELECT FROM unnest(...) with
+// ON CONFLICT DO NOTHING, and any that collided (astronomically unlikely
+// in a 31^12 keyspace, but checked rather than trusted away) are
+// regenerated and retried - so a batch of 100 is one round trip, not 100.
 app.post("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const expiry = resolveExpiry(req.body);
   if (expiry.error) return res.status(400).json({ error: expiry.error });
-  // Collisions are astronomically unlikely (32^20 keyspace) but checked
-  // and retried anyway rather than trusting that away - a crash here
-  // would be a strange way to fail to sell a key.
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const key = generateLicenseKey();
-    try {
-      const { rows } = await pool.query(
-        `INSERT INTO licenses (license_key, expires_at) VALUES ($1, $2)
-         RETURNING id, license_key, status, created_at, expires_at`,
-        [key, expiry.value]
-      );
-      return res.status(201).json(rows[0]);
-    } catch (e) {
-      if (e.code === "23505") continue; // unique_violation on license_key - retry with a new one
-      console.error("Failed to create license:", e);
-      return res.status(500).json({ error: "Could not create license." });
-    }
+
+  const bulk = req.body && req.body.count !== undefined && req.body.count !== null && req.body.count !== "";
+  const count = bulk ? Number(req.body.count) : 1;
+  if (!Number.isInteger(count) || count < 1 || count > MAX_BULK) {
+    return res.status(400).json({ error: `count must be a whole number from 1 to ${MAX_BULK}.` });
   }
-  return res.status(500).json({ error: "Could not generate a unique license key - try again." });
+  const detail = expiry.value ? `expires ${expiry.value.toISOString()}` : "never expires";
+
+  const created = [];
+  for (let attempt = 0; attempt < 5 && created.length < count; attempt++) {
+    const wanted = Array.from({ length: count - created.length }, generateLicenseKey);
+    const { rows } = await pool.query(
+      `WITH ins AS (
+         INSERT INTO licenses (license_key, expires_at)
+         SELECT k, $2::timestamptz FROM unnest($1::text[]) AS k
+         ON CONFLICT (license_key) DO NOTHING
+         RETURNING id, license_key, status, created_at, expires_at
+       ), ev AS (
+         INSERT INTO license_events (license_key, event, detail, ip)
+         SELECT license_key, 'created', $3, $4 FROM ins
+       )
+       SELECT * FROM ins ORDER BY id`,
+      [wanted, expiry.value, detail, clientIp(req)]
+    );
+    created.push(...rows);
+  }
+  if (created.length < count) {
+    return res.status(500).json({ error: "Could not generate enough unique keys - try again." });
+  }
+  return res.status(201).json(bulk ? { created } : created[0]);
 }));
 
-// Optional ?status=active|revoked|banned and/or ?q=<substring> (matched
-// against the key and the note, case-insensitive) on top of the
-// existing ?limit/?offset pagination - what the dashboard's search box
-// and status filter dropdown both call through. Neither param is
-// required, so every existing curl/script call to this route (bare
-// ?limit&offset) keeps working unchanged.
+// Filters the dashboard offers. `status` values that are columns go
+// straight to the column; the rest are derived views a person thinks in
+// ("expiring soon", "online now", "never used") that are really
+// conditions on timestamps.
 const LICENSE_STATUSES = ["active", "revoked", "banned"];
+const DERIVED_FILTERS = {
+  expired: `expires_at IS NOT NULL AND expires_at <= now()`,
+  expiring: `status = 'active' AND expires_at > now() AND expires_at <= now() + interval '7 days'`,
+  // The app re-checks every five minutes while running, so anything
+  // seen in the last ten is, for practical purposes, running right now.
+  online: `status = 'active' AND last_seen_at > now() - interval '10 minutes'`,
+  unused: `hwid IS NULL AND last_seen_at IS NULL`,
+};
+
+function buildLicenseQuery(query) {
+  const conditions = [];
+  const params = [];
+  if (DERIVED_FILTERS[query.status]) {
+    conditions.push(DERIVED_FILTERS[query.status]);
+  } else if (LICENSE_STATUSES.includes(query.status)) {
+    params.push(query.status);
+    conditions.push(`status = $${params.length}`);
+  }
+  const q = typeof query.q === "string" ? query.q.trim().slice(0, 128) : "";
+  if (q) {
+    // Key, device digest, or last IP - "which key is this machine on?"
+    // and "what else has this IP activated?" are both support questions
+    // that used to need a hand-written SQL query.
+    params.push(`%${q}%`);
+    const p = `$${params.length}`;
+    conditions.push(`(license_key ILIKE ${p} OR hwid ILIKE ${p} OR last_seen_ip ILIKE ${p})`);
+  }
+  return { where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "", params };
+}
+
 app.get("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 1000);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-  const status = LICENSE_STATUSES.includes(req.query.status) ? req.query.status : null;
-  const q = typeof req.query.q === "string" && req.query.q.trim() ? req.query.q.trim() : null;
-
-  const conditions = [];
-  const params = [];
-  // "expired" is offered as a pseudo-status in the dashboard's filter
-  // because that is how a person thinks about it, but it is not a value
-  // of the `status` column - expiry is orthogonal to active/revoked/
-  // banned (a key can be active AND expired). So it filters on the
-  // timestamp instead.
-  if (req.query.status === "expired") {
-    conditions.push(`expires_at IS NOT NULL AND expires_at <= now()`);
-  } else if (status) {
-    params.push(status);
-    conditions.push(`status = $${params.length}`);
-  }
-  if (q) {
-    // Key only now that `note` is gone from this API.
-    params.push(`%${q}%`);
-    conditions.push(`license_key ILIKE $${params.length}`);
-  }
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const { where, params } = buildLicenseQuery(req.query);
   params.push(limit);
-  const limitPlaceholder = `$${params.length}`;
+  const limitP = `$${params.length}`;
   params.push(offset);
-  const offsetPlaceholder = `$${params.length}`;
+  const offsetP = `$${params.length}`;
 
   const { rows } = await pool.query(
     `SELECT id, license_key, hwid, status, created_at, expires_at, last_seen_at, last_seen_ip
-     FROM licenses ${where} ORDER BY created_at DESC LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
+       FROM licenses ${where}
+      ORDER BY created_at DESC LIMIT ${limitP} OFFSET ${offsetP}`,
     params
   );
   res.json(rows);
 }));
 
-// Summary counts for the dashboard's stat cards - one grouped query
-// rather than making the dashboard fetch every page just to count
-// them itself.
-app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+// Every number the dashboard's overview shows, in one pass over the
+// table with FILTER clauses rather than one query per card. The original
+// response fields (total, bound, unbound, expired, byStatus) are kept
+// exactly as they were for anything already reading them.
+app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (_req, res) => {
   const { rows } = await pool.query(
-    `SELECT status,
-            COUNT(*)::int AS count,
-            COUNT(hwid)::int AS bound,
-            (COUNT(*) FILTER (WHERE expires_at IS NOT NULL AND expires_at <= now()))::int AS expired
-       FROM licenses
-      GROUP BY status`
+    `SELECT count(*)::int                                                       AS total,
+            count(hwid)::int                                                    AS bound,
+            (count(*) FILTER (WHERE status = 'active'))::int                    AS active,
+            (count(*) FILTER (WHERE status = 'revoked'))::int                   AS revoked,
+            (count(*) FILTER (WHERE status = 'banned'))::int                    AS banned,
+            (count(*) FILTER (WHERE ${DERIVED_FILTERS.expired}))::int           AS expired,
+            (count(*) FILTER (WHERE ${DERIVED_FILTERS.expiring}))::int          AS expiring_soon,
+            (count(*) FILTER (WHERE ${DERIVED_FILTERS.online}))::int            AS online,
+            (count(*) FILTER (WHERE ${DERIVED_FILTERS.unused}))::int            AS never_used,
+            (count(*) FILTER (WHERE created_at > now() - interval '7 days'))::int AS created_7d
+       FROM licenses`
   );
-  const byStatus = { active: 0, revoked: 0, banned: 0 };
-  let total = 0;
-  let bound = 0;
-  let expired = 0;
-  for (const row of rows) {
-    byStatus[row.status] = row.count;
-    total += row.count;
-    bound += row.bound;
-    expired += row.expired;
-  }
-  // `expired` deliberately overlaps the byStatus counts rather than
-  // being a fourth bucket - a key can be active and expired at once,
-  // and the dashboard needs to show both facts.
-  res.json({ total, bound, unbound: total - bound, expired, byStatus });
+  const r = rows[0];
+  const { rows: ev } = await pool.query(
+    `SELECT (count(*) FILTER (WHERE event = 'activated'))::int       AS activations_24h,
+            (count(*) FILTER (WHERE event = 'rejected_device'))::int AS device_rejections_24h
+       FROM license_events WHERE created_at > now() - interval '24 hours'`
+  );
+  res.json({
+    total: r.total,
+    bound: r.bound,
+    unbound: r.total - r.bound,
+    expired: r.expired,
+    byStatus: { active: r.active, revoked: r.revoked, banned: r.banned },
+    expiringSoon: r.expiring_soon,
+    online: r.online,
+    neverUsed: r.never_used,
+    created7d: r.created_7d,
+    activations24h: ev[0].activations_24h,
+    deviceRejections24h: ev[0].device_rejections_24h,
+  });
 }));
 
-app.post("/admin/licenses/:key/revoke", adminLimiter, requireAdminSecret, ah(async (req, res) => {
-  const { rowCount } = await pool.query(
-    "UPDATE licenses SET status = 'revoked' WHERE license_key = $1",
-    [req.params.key]
+// One key's history, newest first.
+app.get("/admin/licenses/:key/events", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+  const { rows } = await pool.query(
+    `SELECT event, detail, ip, hwid, created_at FROM license_events
+      WHERE license_key = $1 ORDER BY created_at DESC, id DESC LIMIT $2`,
+    [req.params.key, limit]
   );
-  if (rowCount === 0) return res.status(404).json({ error: "No license with that key." });
-  res.json({ ok: true });
+  res.json(rows);
 }));
 
-app.post("/admin/licenses/:key/unrevoke", adminLimiter, requireAdminSecret, ah(async (req, res) => {
-  const { rowCount } = await pool.query(
-    "UPDATE licenses SET status = 'active' WHERE license_key = $1",
-    [req.params.key]
+// The recent-activity feed across every key.
+app.get("/admin/events", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 500);
+  const { rows } = await pool.query(
+    `SELECT license_key, event, detail, ip, hwid, created_at FROM license_events
+      ORDER BY created_at DESC, id DESC LIMIT $1`,
+    [limit]
   );
-  if (rowCount === 0) return res.status(404).json({ error: "No license with that key." });
-  res.json({ ok: true });
+  res.json(rows);
 }));
 
-// Distinct from revoke: `/verify` already treats 'banned' as its own
-// rejection reason with its own message ("...has been banned."), so
-// this is for a harder/more deliberate block (abuse, chargebacks,
-// sharing a key publicly) than an ordinary revoke (refund, mistake).
-// Nothing server-side actually treats the two differently beyond that
-// message - split them if that ever needs to change (e.g. banned keys
-// also blocking that hwid account-wide).
-app.post("/admin/licenses/:key/ban", adminLimiter, requireAdminSecret, ah(async (req, res) => {
-  const { rowCount } = await pool.query(
-    "UPDATE licenses SET status = 'banned' WHERE license_key = $1",
-    [req.params.key]
+/// RFC 4180 field quoting, plus a guard against CSV formula injection: a
+/// cell beginning with = + - @ (or tab/CR) is executed as a formula when
+/// the export is opened in Excel or Sheets. Nothing in this table
+/// *should* start that way, but `last_seen_ip` and `hwid` arrive from
+/// the network, and an export is something you open without thinking.
+function csvCell(value) {
+  if (value === null || value === undefined) return "";
+  let s = value instanceof Date ? value.toISOString() : String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// Same filters as the list, so "export what I'm looking at" works - but
+// no pagination: an export is the whole matching set.
+app.get("/admin/export.csv", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+  const { where, params } = buildLicenseQuery(req.query);
+  const { rows } = await pool.query(
+    `SELECT license_key, status, hwid, created_at, expires_at, last_seen_at, last_seen_ip
+       FROM licenses ${where} ORDER BY created_at DESC`,
+    params
   );
-  if (rowCount === 0) return res.status(404).json({ error: "No license with that key." });
-  res.json({ ok: true });
+  const header = ["license_key", "status", "device", "created_at", "expires_at", "last_seen_at", "last_seen_ip"];
+  const body = rows.map((r) =>
+    [r.license_key, r.status, r.hwid, r.created_at, r.expires_at, r.last_seen_at, r.last_seen_ip].map(csvCell).join(",")
+  );
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="licenses-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.setHeader("Cache-Control", "no-store");
+  res.end([header.join(","), ...body].join("\r\n") + "\r\n");
 }));
 
-// Same end state as /unrevoke (back to 'active') - kept as its own
-// route rather than making the dashboard call /unrevoke for a banned
-// key, so the two button labels ("Unrevoke" vs "Unban") each have a
-// matching, equally-named endpoint instead of one hiding behind the
-// other's name.
-app.post("/admin/licenses/:key/unban", adminLimiter, requireAdminSecret, ah(async (req, res) => {
-  const { rowCount } = await pool.query(
-    "UPDATE licenses SET status = 'active' WHERE license_key = $1",
-    [req.params.key]
-  );
-  if (rowCount === 0) return res.status(404).json({ error: "No license with that key." });
-  res.json({ ok: true });
-}));
+// Status changes. Each is one statement that both makes the change and
+// records it. `revoke`/`ban` are distinct to /verify (each has its own
+// rejection message) - see the note that used to live here: nothing else
+// treats them differently, ban is just the harder, more deliberate one.
+for (const [action, toStatus] of [
+  ["revoke", "revoked"],
+  ["unrevoke", "active"],
+  ["ban", "banned"],
+  ["unban", "active"],
+]) {
+  app.post(`/admin/licenses/:key/${action}`, adminLimiter, requireAdminSecret, ah(async (req, res) => {
+    const changed = await mutateAndLog(
+      req,
+      `UPDATE licenses SET status = $2 WHERE license_key = $1 RETURNING license_key`,
+      [req.params.key, toStatus],
+      action === "unrevoke" || action === "unban" ? "reactivated" : toStatus
+    );
+    if (changed === 0) return res.status(404).json({ error: "No license with that key." });
+    res.json({ ok: true });
+  }));
+}
 
-// Sets or clears one key's expiry after the fact - renewing a key
-// someone re-bought, extending a trial, or taking the expiry off
-// entirely. Body is the same shape `POST /admin/licenses` accepts
-// (`expires_in_days` or `expires_at`); send neither, or 0 days, to
-// clear it back to "never expires".
+// Sets or clears one key's expiry - same body as creating a key
+// (`expires_in_days` or `expires_at`); neither, or 0 days, clears it to
+// "never expires". Counted from *now*. For "add 30 days to what they
+// have", use /extend instead.
 app.post("/admin/licenses/:key/expiry", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const expiry = resolveExpiry(req.body);
   if (expiry.error) return res.status(400).json({ error: expiry.error });
-
+  const detail = expiry.value ? `set to ${expiry.value.toISOString()}` : "set to never expires";
   const { rows } = await pool.query(
-    "UPDATE licenses SET expires_at = $1 WHERE license_key = $2 RETURNING license_key, expires_at",
-    [expiry.value, req.params.key]
+    `WITH m AS (
+       UPDATE licenses SET expires_at = $1::timestamptz WHERE license_key = $2
+       RETURNING license_key, expires_at
+     ), ev AS (
+       INSERT INTO license_events (license_key, event, detail, ip)
+       SELECT license_key, 'expiry_changed', $3, $4 FROM m
+     )
+     SELECT license_key, expires_at FROM m`,
+    [expiry.value, req.params.key, detail, clientIp(req)]
   );
   if (rows.length === 0) return res.status(404).json({ error: "No license with that key." });
   res.json({ ok: true, expires_at: rows[0].expires_at });
 }));
 
-app.post("/admin/licenses/:key/reset-hwid", adminLimiter, requireAdminSecret, ah(async (req, res) => {
-  // Lets a customer move a key to a new/replacement device - without
-  // this there would be no legitimate way back in after a reinstall or
-  // a new PC, short of you editing the database by hand.
-  const { rowCount } = await pool.query(
-    "UPDATE licenses SET hwid = NULL WHERE license_key = $1",
-    [req.params.key]
+// Adds days to a key - what a renewal actually is. Extends from the
+// current expiry if it's still in the future, or from now if the key has
+// already lapsed, so renewing an expired key gives the full period from
+// today rather than a period that's partly already gone.
+//
+// Refused for a key that never expires: there's nothing to add to, and
+// silently turning a lifetime key into a 30-day one would be the worst
+// possible reading of "extend".
+app.post("/admin/licenses/:key/extend", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+  const days = Number(req.body && req.body.days);
+  if (!Number.isInteger(days) || days < 1 || days > 3650) {
+    return res.status(400).json({ error: "days must be a whole number from 1 to 3650." });
+  }
+  const { rows } = await pool.query(
+    `WITH m AS (
+       UPDATE licenses
+          SET expires_at = GREATEST(expires_at, now()) + make_interval(days => $2::int)
+        WHERE license_key = $1 AND expires_at IS NOT NULL
+       RETURNING license_key, expires_at
+     ), ev AS (
+       INSERT INTO license_events (license_key, event, detail, ip)
+       SELECT license_key, 'extended', $3, $4 FROM m
+     )
+     SELECT license_key, expires_at FROM m`,
+    [req.params.key, days, `+${days} days`, clientIp(req)]
   );
-  if (rowCount === 0) return res.status(404).json({ error: "No license with that key." });
+  if (rows.length > 0) return res.json({ ok: true, expires_at: rows[0].expires_at });
+
+  // Nothing updated: tell the two reasons apart, since they need
+  // different fixes. Only on this (rare) path does it cost a second query.
+  const { rows: exists } = await pool.query(`SELECT expires_at FROM licenses WHERE license_key = $1`, [req.params.key]);
+  if (exists.length === 0) return res.status(404).json({ error: "No license with that key." });
+  return res.status(400).json({ error: "This key never expires - there's nothing to extend. Use Change expiry to give it one." });
+}));
+
+app.post("/admin/licenses/:key/reset-hwid", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+  // Lets a customer move a key to a new/replacement device. The device
+  // being released is recorded, so a key that gets reset suspiciously
+  // often (a key being shared around) is visible in its history.
+  //
+  // Its own statement rather than mutateAndLog, because the event row
+  // needs the *released* hwid, which only exists before the update: the
+  // FROM subquery reads the row as it was at statement start.
+  const { rows } = await pool.query(
+    `WITH m AS (
+       UPDATE licenses l SET hwid = NULL
+         FROM (SELECT id, hwid AS old_hwid FROM licenses WHERE license_key = $1) prev
+        WHERE l.id = prev.id
+        RETURNING l.license_key, prev.old_hwid
+     )
+     INSERT INTO license_events (license_key, event, detail, ip, hwid)
+     SELECT license_key, 'device_reset', NULL, $2, old_hwid FROM m
+     RETURNING license_key`,
+    [req.params.key, clientIp(req)]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: "No license with that key." });
   res.json({ ok: true });
 }));
 
 app.delete("/admin/licenses/:key", adminLimiter, requireAdminSecret, ah(async (req, res) => {
-  const { rowCount } = await pool.query(
-    "DELETE FROM licenses WHERE license_key = $1",
-    [req.params.key]
+  // The history is kept (no foreign key - see migrate()), so the
+  // deletion itself is recorded as its last entry.
+  const changed = await mutateAndLog(
+    req,
+    `DELETE FROM licenses WHERE license_key = $1 RETURNING license_key`,
+    [req.params.key],
+    "deleted"
   );
-  if (rowCount === 0) return res.status(404).json({ error: "No license with that key." });
+  if (changed === 0) return res.status(404).json({ error: "No license with that key." });
   res.json({ ok: true });
 }));
 
@@ -707,7 +965,11 @@ app.use((err, _req, res, _next) => {
 });
 
 migrate()
+  .then(checkVerifyStatement)
   .then(() => {
+    pruneEvents();
+    setInterval(pruneEvents, 60 * 60 * 1000).unref();
+
     const server = app.listen(PORT, () => {
       console.log(`afkstrike license server listening on :${PORT}`);
     });
@@ -737,6 +999,9 @@ migrate()
     process.on("SIGINT", () => shutdown("SIGINT"));
   })
   .catch((e) => {
-    console.error("Failed to run startup migration:", e);
+    // Exiting (rather than serving anyway) is the point: a server that
+    // can't migrate, or whose /verify statement Postgres rejects, must
+    // fail its health check so the previous deployment stays live.
+    console.error("Startup check failed - refusing to serve:", e);
     process.exit(1);
   });

@@ -214,6 +214,123 @@ Earlier the column was left in place. It is now dropped outright by the
 startup migration (`ALTER TABLE licenses DROP COLUMN IF EXISTS note`).
 **This is irreversible** - any text that was stored there is gone.
 
+## Key format: `AFK-XXXX-XXXX-XXXX` (59th pass)
+
+New keys are a fixed `AFK` prefix and three groups of four, from the same
+alphabet as before (no `0 1 I L O`). The prefix carries no entropy; the 12
+random characters give about 7.9 × 10¹⁷ keys, which against `/verify`'s 30
+checks a minute per address is not guessable. Generation now uses
+`crypto.randomInt`, which is exactly uniform - the previous `byte % 31`
+slightly favoured the first eight letters.
+
+**Keys sold before this (`XXXXX-XXXXX-XXXXX-XXXXX`) keep working
+unchanged.** `/verify` matches the stored string exactly and never parses
+a key's shape, so the format is only ever decided at creation. Nothing is
+migrated. The test suite inserts an old-format key the way the old
+generator stored it and checks it still activates, device-locks and can
+be managed. The desktop app accepts both: its key box draws the `AFK-`
+prefix itself, and switches to the old layout when an old key is pasted.
+
+## Key history, bulk keys and renewals (58th pass)
+
+**Per-key history.** A new `license_events` table records everything
+that *changes or refuses* something: creation, first activation, the
+legacy-id migration, every rejection (wrong device, expired, revoked,
+banned) - with the device that tried - and every admin action (revoke,
+ban, reactivate, device reset - with the device released - expiry
+change, extend, delete). It answers the question every support
+conversation starts with, "it stopped working, what happened?", which
+previously had no answer beyond a single `last_seen_at`.
+
+Three deliberate choices:
+
+- **Routine successful check-ins are not recorded.** Every running
+  install checks in every five minutes; logging those would bury the
+  events that matter, and `last_seen_at` already has them.
+- **Unknown keys are never recorded**, so nobody can grow the table by
+  sending garbage keys.
+- **No foreign key to `licenses`**, so a key's history survives the key
+  being deleted - which is exactly when a chargeback or a "you deleted
+  my key" dispute needs it. The deletion is itself the last entry.
+
+Events are pruned after 180 days, which covers a typical chargeback
+window with room to spare.
+
+**/verify is still one round trip.** The event is written by a
+data-modifying CTE inside the same statement that does the bind, not by
+a second query. The event name is computed once from the outcome and
+the INSERT filters on it being non-null, so "should this be logged" and
+"what is logged" can't disagree - a mismatch there would be a NOT NULL
+violation that fails the whole statement, i.e. locks a customer out over
+a logging bug. Admin actions likewise write the change and its history
+entry in one statement, so the two can never come apart.
+
+**Bulk keys.** `POST /admin/licenses` takes an optional `count` (1-100)
+and returns `{ "created": [...] }`. Without `count` the response is the
+single bare row exactly as before, so existing scripts are unaffected.
+A batch is one `INSERT ... SELECT FROM unnest(...) ON CONFLICT DO
+NOTHING`, with any collision regenerated, so 100 keys is one round trip.
+
+**Renewals.** `POST /admin/licenses/:key/extend` with `{"days": N}` adds
+days to the *current* expiry, or to today if the key has already lapsed
+- so renewing an expired key gives the full period from now, not a
+period partly already gone. It refuses a key that never expires: there's
+nothing to add to, and silently turning a lifetime key into a 30-day one
+would be the worst possible reading of "extend". (`/expiry` still sets
+an absolute expiry, counted from now.)
+
+**Richer stats, filters and search.** `/admin/stats` adds `online`
+(checked in within 10 minutes - the app re-checks every 5),
+`expiringSoon` (≤ 7 days), `neverUsed`, `created7d`, `activations24h` and
+`deviceRejections24h`, all from one pass with `FILTER` clauses; the
+original fields are unchanged. `/admin/licenses?status=` also takes
+`expiring`, `online` and `unused`, and `?q=` now matches the device
+digest and last IP as well as the key - "which key is this PC on?" used
+to need hand-written SQL.
+
+**CSV export.** `GET /admin/export.csv` takes the same `status`/`q`
+filters and returns every matching key (no pagination). Cells starting
+with `= + - @` are prefixed with `'`: `last_seen_ip` and `hwid` arrive
+from the network, and an export is something you open in Excel without
+thinking - that's formula injection waiting to happen.
+
+The verify success message is now `"License activated."` (was `"Device
+unlocked."`), matching the desktop app's new key-entry screen.
+
+## Testing
+
+`npm test` runs the real `server.js` against a real Postgres and drives
+it over HTTP, the way the desktop app does - checks across device
+binding, the bind race, legacy migration, expiry, bulk keys, history,
+stats, export, rate limiting and both key formats (48 checks).
+
+```bash
+createdb afkstrike_test
+TEST_DATABASE_URL=postgresql://localhost:5432/afkstrike_test npm test
+```
+
+**It deletes every license in the database it's given**, so it refuses
+to run unless the database name contains `test` and differs from
+`DATABASE_URL`. Never point it at production.
+
+The race test is the one that matters most and is the subtle one. It
+fires twenty activations of one fresh key at once and requires exactly
+one to bind. On its own that proves nothing: each UPDATE commits in
+microseconds, so the requests never actually overlap and the test passes
+even against the known-broken query. So it installs a trigger that holds
+the row lock for 150 ms, making the other nineteen take their snapshots,
+see "unbound", and queue behind the lock - the exact condition under
+which gating on a CTE snapshot lets a second device bind. **Verified
+both ways:** against the real query, 1 of 20 binds; against the broken
+one planted in a copy, 10 of 20 do and the test fails.
+
+This suite has been run, all passing - the first time this server's SQL
+had ever executed. It caught a real bug before it shipped: a doubled
+`)` in the new `/verify` statement that made **every** activation
+return "Internal error". Deployed, that would have locked out every
+customer at once. It parsed fine as JavaScript; only running the SQL
+against Postgres could show it.
+
 ## Deploying on Railway
 
 1. **Push this repo to GitHub** if it isn't already there (Railway
@@ -301,16 +418,26 @@ open `https://license.lootbloxy.com/` (or your Railway URL) in a
 browser and it's right there. It drives the exact same `/admin/*`
 routes documented below, just with buttons instead of curl:
 
-- **Stat cards** - total keys, active/revoked/banned counts,
-  device-bound count.
-- **Search + status filter** - search by key or note, filter to
-  active/revoked/banned, paginated 25 at a time.
-- **Create a key** (with an optional note) - shows the new key once,
-  click to copy.
-- **Per-key actions** - Revoke/Unrevoke, Ban/Unban, Reset device
-  (clears a bound hwid so the customer can activate elsewhere),
-  Delete (asks for confirmation first).
-- Click any key in the table to copy it to the clipboard.
+- **Overview** - the key population as one bar (active/revoked/
+  banned) plus health tiles: online now, expiring within 7 days, never
+  used, activations and wrong-device attempts in the last 24 hours.
+  Each tile is also a shortcut to that filter on the table.
+- **Search + filter** - search by key, device digest or IP; filter by
+  status or by expiring / online / never used; 25 per page.
+- **Create keys** - one, or up to 100 at once with **Copy all** and
+  **Download .txt** (one key per line, ready to paste into Discord).
+- **Per-key actions** - Revoke/Unrevoke and Expiry inline; History,
+  Extend +30 days / +1 year (only offered for keys that expire), Reset
+  device, Ban/Unban and Delete behind the ⋯ menu.
+- **Key history** - a timeline of everything that happened to a key.
+- **Recent activity** - the same timeline across every key.
+- **Export CSV** - whatever the current filter and search show.
+- Click any key to copy it.
+
+Restyled in the 58th pass from magenta to the desktop app's own indigo
+(`#7c5cfc`), so the two read as one product. Tested end to end in a real
+browser against a real server and database - 20 checks, including the
+batch download, history, extend, export and a phone-width layout.
 
 It asks for the `ADMIN_SECRET` once per browser tab (kept in that
 tab's `sessionStorage` only - gone on tab close, never sent anywhere
@@ -326,27 +453,53 @@ them are called by the desktop app - these are for you (or a
 storefront's backend, if you build one later) to run after a sale, or
 by the admin dashboard above if you'd rather click than type.
 
-**Create a key:**
+**Create a key** (body optional; `expires_in_days` or `expires_at`):
 ```bash
 curl -X POST https://license.lootbloxy.com/admin/licenses \
   -H "X-Admin-Secret: $ADMIN_SECRET" \
   -H "Content-Type: application/json" \
-  -d '{"note": "order #1234, buyer@example.com"}'
+  -d '{"expires_in_days": 30}'
 ```
-Returns `{"id", "license_key", "status", "note", "created_at"}`. The
-`license_key` is what the customer types into the app's gate.
+Returns `{"id", "license_key", "status", "created_at", "expires_at"}`.
+The `license_key` (`AFK-XXXX-XXXX-XXXX`) is what the customer types into the app.
 
-**List keys** (paginated, newest first; optional `status` and `q`
-filters - `status` is one of `active`/`revoked`/`banned`, `q` matches
-the key or note, case-insensitive, same params the dashboard's search
-box and status dropdown use):
+**Create many** (1-100; returns `{"created": [...]}`):
+```bash
+curl -X POST https://license.lootbloxy.com/admin/licenses \
+  -H "X-Admin-Secret: $ADMIN_SECRET" -H "Content-Type: application/json" \
+  -d '{"count": 25, "expires_in_days": 30}'
+```
+
+**Extend a key** (adds to the current expiry, or to today if lapsed;
+refused for a never-expiring key):
+```bash
+curl -X POST https://license.lootbloxy.com/admin/licenses/XXXXX-XXXXX-XXXXX-XXXXX/extend \
+  -H "X-Admin-Secret: $ADMIN_SECRET" -H "Content-Type: application/json" \
+  -d '{"days": 30}'
+```
+
+**A key's history / recent activity across all keys:**
+```bash
+curl -H "X-Admin-Secret: $ADMIN_SECRET" https://license.lootbloxy.com/admin/licenses/XXXXX-XXXXX-XXXXX-XXXXX/events
+curl -H "X-Admin-Secret: $ADMIN_SECRET" "https://license.lootbloxy.com/admin/events?limit=50"
+```
+
+**Export as CSV** (same `status`/`q` filters as the list):
+```bash
+curl -H "X-Admin-Secret: $ADMIN_SECRET" "https://license.lootbloxy.com/admin/export.csv?status=expiring" -o expiring.csv
+```
+
+**List keys** (paginated, newest first; optional `status` - one of
+`active`/`revoked`/`banned`/`expired`/`expiring`/`online`/`unused` - and
+`q`, which matches the key, device digest or last IP, case-insensitive):
 ```bash
 curl -H "X-Admin-Secret: $ADMIN_SECRET" \
-  "https://license.lootbloxy.com/admin/licenses?limit=50&offset=0&status=active&q=order%20%231234"
+  "https://license.lootbloxy.com/admin/licenses?limit=50&offset=0&status=online&q=203.0.113"
 ```
 
-**Summary counts** (total/active/revoked/banned/device-bound - what the
-dashboard's stat cards show):
+**Summary counts** (what the dashboard's overview shows - the original
+totals plus `online`, `expiringSoon`, `neverUsed`, `created7d`,
+`activations24h`, `deviceRejections24h`):
 ```bash
 curl -H "X-Admin-Secret: $ADMIN_SECRET" https://license.lootbloxy.com/admin/stats
 ```

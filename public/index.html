@@ -32,23 +32,28 @@
        translucent whites over a gradient - layering rgba(255,255,255,
        0.04) three deep made every panel edge a slightly different
        muddy grey depending on what was behind it. */
-    --bg: #0b0a12;
-    --surface: #15131f;
-    --surface-2: #1d1a2b;
-    --surface-3: #241f36;
-    --line: #2a2640;
-    --line-soft: #211d33;
+    /* 58th pass: moved from the magenta palette to the desktop app's
+       own flat indigo (its --accent #7c5cfc, sampled from the owner's
+       reference), so the dashboard and the app read as one product. */
+    --bg: #0a0d16;
+    --surface: #0f1323;
+    --surface-2: #161b30;
+    --surface-3: #1d2340;
+    --line: #22273c;
+    --line-soft: #1a1f33;
 
-    --text: #f4f1fb;
-    --dim: #a49bbf;
-    --faint: #6f6788;
+    --text: #eef0fa;
+    --dim: #9ea3bd;
+    --faint: #6d7390;
 
-    --accent: #a855f7;
-    --accent-2: #7c3aed;
-    --accent-soft: rgba(168, 85, 247, 0.14);
+    --accent: #7c5cfc;
+    --accent-2: #6a48f0;
+    --accent-3: #a996ff;
+    --accent-soft: rgba(124, 92, 252, 0.14);
+    --accent-line: rgba(124, 92, 252, 0.32);
 
-    --ok: #3ddc97;
-    --ok-soft: rgba(61, 220, 151, 0.13);
+    --ok: #34d399;
+    --ok-soft: rgba(52, 211, 153, 0.13);
     --warn: #f5b544;
     --warn-soft: rgba(245, 181, 68, 0.13);
     --bad: #ff6b6b;
@@ -79,8 +84,8 @@
   html, body { margin: 0; height: 100%; }
   body {
     background:
-      radial-gradient(1100px 600px at 12% -15%, rgba(124, 58, 237, 0.18), transparent 62%),
-      radial-gradient(800px 500px at 108% 4%, rgba(168, 85, 247, 0.10), transparent 58%),
+      radial-gradient(1100px 600px at 12% -15%, rgba(124, 92, 252, 0.13), transparent 62%),
+      radial-gradient(800px 500px at 108% 4%, rgba(106, 72, 240, 0.07), transparent 58%),
       var(--bg);
     color: var(--text);
     min-height: 100%;
@@ -138,7 +143,7 @@
   /* ---------- Secret-entry gate ---------- */
   #gate {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: rgba(8, 6, 14, 0.9); backdrop-filter: blur(8px); z-index: 50; padding: 20px;
+    background: rgba(6, 8, 16, 0.92); backdrop-filter: blur(8px); z-index: 50; padding: 20px;
   }
   .gate-card {
     width: min(400px, 100%); padding: 30px; border-radius: var(--r-lg);
@@ -226,7 +231,7 @@
   select {
     appearance: none; -webkit-appearance: none;
     padding-right: 36px; cursor: pointer;
-    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a49bbf' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ea3bd' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 13px center;
   }
@@ -318,7 +323,7 @@
 
   /* ---------- Modals ---------- */
   .modal-overlay {
-    position: fixed; inset: 0; background: rgba(5, 3, 10, 0.72); backdrop-filter: blur(6px);
+    position: fixed; inset: 0; background: rgba(5, 7, 14, 0.74); backdrop-filter: blur(6px);
     display: flex; align-items: center; justify-content: center; z-index: 40; padding: 20px;
     animation: fade-in 0.15s var(--ease);
   }
@@ -350,7 +355,7 @@
 
   .new-key-result {
     margin-top: 18px; padding: 15px; border-radius: var(--r-md); background: var(--accent-soft);
-    border: 1px solid rgba(168, 85, 247, 0.32);
+    border: 1px solid var(--accent-line);
   }
   .new-key-result .rk { font-size: 12.5px; color: var(--dim); margin-bottom: 9px; }
   .new-key-result .key-chip { font-size: 14px; letter-spacing: 0.02em; }
@@ -363,7 +368,7 @@
     padding: 12px 17px; border-radius: var(--r-md); font-size: 13.5px; font-weight: 500; color: white;
     box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); animation: toast-in 0.2s var(--ease); max-width: 330px;
   }
-  .toast.ok { background: #15803d; }
+  .toast.ok { background: #0f766e; }
   .toast.err { background: #b91c1c; }
   @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -384,6 +389,62 @@
     th.col-status, td.col-status { min-width: 0; }
     .row-actions button { font-size: 11px; padding: 6px 8px; }
   }
+
+
+  /* ---------- 58th pass additions ---------- */
+  /* Health tiles under the population bar: things you act on (who's
+     running right now, whose key lapses this week) rather than shares
+     of the total, which is why they're separate from the bar above. */
+  .tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line-soft); }
+  .tile {
+    padding: 12px 14px; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line);
+    text-align: left; color: inherit; font: inherit; cursor: pointer;
+  }
+  .tile:hover { border-color: var(--accent-line); }
+  .tile .tl { font-size: 11.5px; color: var(--faint); display: flex; align-items: center; gap: 6px; }
+  .tile .tv { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; margin-top: 3px; }
+  .tile .tv.ok { color: var(--ok); }
+  .tile .tv.warn { color: var(--warn); }
+  .tile .tv.bad { color: var(--bad); }
+  .tile .tv.accent { color: var(--accent-3); }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); animation: pulse 2s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); } 70% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
+  @media (max-width: 860px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+  /* Quantity field in the create modal */
+  .qty-row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .qty-row input { width: 92px; text-align: center; }
+  .qty-row .qty-hint { font-size: 12.5px; color: var(--faint); }
+
+  /* Several created keys at once */
+  .key-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; margin: 4px 0 10px; }
+  .key-list .key-chip { display: block; text-align: center; }
+  .result-actions { display: flex; gap: 8px; }
+  .result-actions button { flex: 1; justify-content: center; }
+
+  /* Per-key history + the global feed share one timeline look */
+  .timeline { display: flex; flex-direction: column; max-height: 420px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+  .ev { display: grid; grid-template-columns: 10px 1fr auto; gap: 12px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+  .ev:last-child { border-bottom: none; }
+  .ev-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--faint); }
+  .ev-dot.ok { background: var(--ok); }
+  .ev-dot.warn { background: var(--warn); }
+  .ev-dot.bad { background: var(--bad); }
+  .ev-dot.accent { background: var(--accent); }
+  .ev-title { font-size: 13px; color: var(--text); font-weight: 500; }
+  .ev-meta { font-size: 12px; color: var(--faint); margin-top: 2px; word-break: break-all; }
+  .ev-meta .key-chip { font-size: 11px; padding: 2px 6px; }
+  .ev-time { font-size: 12px; color: var(--faint); white-space: nowrap; }
+  .modal-card.wide { width: min(560px, 100%); }
+
+  .feed {
+    margin-top: 22px; border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--surface);
+    padding: 18px 22px;
+  }
+  .feed-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .feed-head h2 { font-size: 14.5px; margin: 0; font-weight: 600; }
+  .feed .timeline { max-height: 360px; }
+  .muted-line { color: var(--faint); font-size: 13px; padding: 14px 0; }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
@@ -441,12 +502,35 @@
         <div class="legend-item"><span class="dot dot-expired"></span><b class="tnum" id="statExpired">-</b> expired</div>
         <div class="legend-item"><span class="dot dot-bound"></span><b class="tnum" id="statBound">-</b> bound to a device</div>
       </div>
+      <!-- Each tile is also a shortcut to that filter on the table. -->
+      <div class="tiles">
+        <button type="button" class="tile" data-filter="online" title="Checked in within the last 10 minutes">
+          <span class="tl"><span class="live-dot"></span>Online now</span>
+          <div class="tv ok tnum" id="statOnline">-</div>
+        </button>
+        <button type="button" class="tile" data-filter="expiring" title="Active keys that expire within 7 days">
+          <span class="tl">Expiring &le; 7 days</span>
+          <div class="tv warn tnum" id="statExpiring">-</div>
+        </button>
+        <button type="button" class="tile" data-filter="unused" title="Never activated on any device">
+          <span class="tl">Never used</span>
+          <div class="tv tnum" id="statUnused">-</div>
+        </button>
+        <button type="button" class="tile" data-filter="" title="First activations in the last 24 hours">
+          <span class="tl">Activations &middot; 24h</span>
+          <div class="tv accent tnum" id="statActivations">-</div>
+        </button>
+        <button type="button" class="tile" data-filter="" title="Attempts to use a key on a second device, last 24 hours">
+          <span class="tl">Wrong-device tries &middot; 24h</span>
+          <div class="tv bad tnum" id="statRejections">-</div>
+        </button>
+      </div>
     </div>
 
     <div class="toolbar">
       <div class="search-wrap">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-        <input type="text" id="searchInput" placeholder="Search by key" />
+        <input type="text" id="searchInput" placeholder="Search key, device or IP" />
       </div>
       <select id="statusFilter" aria-label="Filter by status">
         <option value="">All keys</option>
@@ -454,8 +538,12 @@
         <option value="revoked">Revoked</option>
         <option value="banned">Banned</option>
         <option value="expired">Expired</option>
+        <option value="expiring">Expiring soon</option>
+        <option value="online">Online now</option>
+        <option value="unused">Never used</option>
       </select>
       <button class="btn-ghost" id="refreshBtn2">Refresh</button>
+      <button class="btn-ghost" id="exportBtn" title="Download what's currently shown as CSV">Export CSV</button>
       <button class="btn-accent" id="newKeyBtn">New key</button>
     </div>
 
@@ -484,12 +572,25 @@
         <button class="btn-ghost" id="nextPageBtn">Next</button>
       </div>
     </div>
+
+    <div class="feed">
+      <div class="feed-head">
+        <h2>Recent activity</h2>
+        <span class="tnum" style="font-size:12.5px;color:var(--faint)">activations, rejections and admin changes</span>
+      </div>
+      <div class="timeline" id="feed"></div>
+    </div>
   </div>
 
   <div class="modal-overlay hidden" id="newKeyModal">
     <div class="modal-card">
-      <h2>Create a key</h2>
-      <p class="sub">The key binds to the first device that activates it.</p>
+      <h2>Create keys</h2>
+      <p class="sub">Each key binds to the first device that activates it.</p>
+      <span class="field-label">How many</span>
+      <div class="qty-row">
+        <input type="number" id="newKeyCount" min="1" max="100" value="1" class="tnum" aria-label="Number of keys" />
+        <span class="qty-hint">Up to 100 at once &mdash; handy for stocking a shop.</span>
+      </div>
       <span class="field-label">Valid for</span>
       <div class="chips" id="newKeyChips"></div>
       <div class="exact-wrap">
@@ -500,7 +601,7 @@
       <div id="newKeyResult"></div>
       <div class="modal-actions">
         <button class="btn-ghost" id="newKeyCancel">Close</button>
-        <button class="btn-accent" id="newKeyCreate">Create key</button>
+        <button class="btn-accent" id="newKeyCreate">Create</button>
       </div>
     </div>
   </div>
@@ -519,6 +620,17 @@
       <div class="modal-actions">
         <button class="btn-ghost" id="expiryCancel">Cancel</button>
         <button class="btn-accent" id="expirySave">Save expiry</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="historyModal">
+    <div class="modal-card wide">
+      <h2>Key history</h2>
+      <p class="sub"><span class="key-chip" id="historyKey"></span></p>
+      <div class="timeline" id="historyList"></div>
+      <div class="modal-actions">
+        <button class="btn-ghost" id="historyClose">Close</button>
       </div>
     </div>
   </div>
@@ -640,6 +752,141 @@ async function refreshStats() {
   document.getElementById("segActive").style.width = `${pct(s.active)}%`;
   document.getElementById("segRevoked").style.width = `${pct(s.revoked)}%`;
   document.getElementById("segBanned").style.width = `${pct(s.banned)}%`;
+
+  // `?? 0` so this still paints against an older server that predates
+  // these fields, rather than showing "undefined".
+  document.getElementById("statOnline").textContent = stats.online ?? 0;
+  document.getElementById("statExpiring").textContent = stats.expiringSoon ?? 0;
+  document.getElementById("statUnused").textContent = stats.neverUsed ?? 0;
+  document.getElementById("statActivations").textContent = stats.activations24h ?? 0;
+  document.getElementById("statRejections").textContent = stats.deviceRejections24h ?? 0;
+
+  loadFeed().catch(() => {});
+}
+
+// ---------- Event history ----------
+// Server event names -> what a person reading the timeline wants to see.
+// `tone` picks the dot colour: green good, amber attention, red refused
+// or destructive, indigo neutral admin changes.
+const EVENT_LABELS = {
+  created:          { text: "Key created",                           tone: "accent" },
+  activated:        { text: "Activated on a device",                 tone: "ok" },
+  migrated:         { text: "Moved to its new device fingerprint",   tone: "accent" },
+  rejected_device:  { text: "Refused: already on another device",    tone: "bad" },
+  rejected_expired: { text: "Refused: key expired",                  tone: "warn" },
+  rejected_revoked: { text: "Refused: key revoked",                  tone: "warn" },
+  rejected_banned:  { text: "Refused: key banned",                   tone: "bad" },
+  revoked:          { text: "Revoked",                               tone: "warn" },
+  banned:           { text: "Banned",                                tone: "bad" },
+  reactivated:      { text: "Reactivated",                           tone: "ok" },
+  device_reset:     { text: "Device released",                       tone: "accent" },
+  expiry_changed:   { text: "Expiry changed",                        tone: "accent" },
+  extended:         { text: "Extended",                              tone: "accent" },
+  deleted:          { text: "Deleted",                               tone: "bad" },
+};
+
+function relTime(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.round(diff / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return d < 30 ? `${d}d ago` : fmtDate(iso);
+}
+
+/// Renders events into a timeline. `withKey` adds the license key to each
+/// line (the global feed needs it; one key's own history doesn't).
+function renderTimeline(el, events, withKey) {
+  if (!events.length) {
+    el.innerHTML = `<div class="muted-line">Nothing recorded yet.</div>`;
+    return;
+  }
+  el.innerHTML = events.map((e) => {
+    const label = EVENT_LABELS[e.event] || { text: e.event, tone: "" };
+    const bits = [];
+    if (withKey) bits.push(`<span class="key-chip" data-copy-key="${escapeHtml(e.license_key)}" title="Click to copy">${escapeHtml(e.license_key)}</span>`);
+    if (e.detail) bits.push(escapeHtml(e.detail));
+    // The device is the useful part of a rejection or a reset: it's the
+    // machine that tried, or the one that was let go.
+    if (e.hwid) bits.push(`device ${escapeHtml(e.hwid.slice(0, 10))}&hellip;`);
+    if (e.ip) bits.push(escapeHtml(e.ip));
+    return `
+      <div class="ev">
+        <span class="ev-dot ${label.tone}"></span>
+        <div>
+          <div class="ev-title">${escapeHtml(label.text)}</div>
+          ${bits.length ? `<div class="ev-meta">${bits.join(" &middot; ")}</div>` : ""}
+        </div>
+        <span class="ev-time tnum" title="${escapeHtml(fmtDateTime(e.created_at))}">${escapeHtml(relTime(e.created_at))}</span>
+      </div>`;
+  }).join("");
+  el.querySelectorAll("[data-copy-key]").forEach((k) => k.addEventListener("click", () => copyKey(k.dataset.copyKey)));
+}
+
+async function loadFeed() {
+  const events = await api("/admin/events?limit=40");
+  renderTimeline(document.getElementById("feed"), events, true);
+}
+
+const historyModal = document.getElementById("historyModal");
+async function openHistory(key) {
+  document.getElementById("historyKey").textContent = key;
+  const list = document.getElementById("historyList");
+  list.innerHTML = `<div class="muted-line">Loading&hellip;</div>`;
+  historyModal.classList.remove("hidden");
+  try {
+    renderTimeline(list, await api(`/admin/licenses/${encodeURIComponent(key)}/events`), false);
+  } catch (e) {
+    list.innerHTML = `<div class="muted-line">${escapeHtml(e.message)}</div>`;
+  }
+}
+function closeHistory() { historyModal.classList.add("hidden"); }
+document.getElementById("historyClose").addEventListener("click", closeHistory);
+historyModal.addEventListener("click", (e) => { if (e.target === historyModal) closeHistory(); });
+
+// Each health tile is a shortcut to its own filter on the table.
+document.querySelectorAll(".tile[data-filter]").forEach((t) => {
+  t.addEventListener("click", () => {
+    if (!t.dataset.filter) return;
+    statusFilter.value = t.dataset.filter;
+    loadPage(0);
+    document.querySelector(".toolbar").scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+});
+
+// Export what's currently shown (filter + search, not the current page).
+// Fetched rather than linked because the admin secret travels as a
+// header, which a plain download link can't send.
+document.getElementById("exportBtn").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const params = new URLSearchParams();
+    if (statusFilter.value) params.set("status", statusFilter.value);
+    if (searchInput.value.trim()) params.set("q", searchInput.value.trim());
+    const res = await fetch(`/admin/export.csv?${params}`, { headers: { "X-Admin-Secret": getSecret() } });
+    if (res.status === 401) { showGate("That secret was rejected by the server."); return; }
+    if (!res.ok) throw new Error(`Export failed (${res.status}).`);
+    downloadBlob(await res.blob(), `licenses-${new Date().toISOString().slice(0, 10)}.csv`);
+    toast("Export downloaded.");
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ---------- Expiry formatting ----------
@@ -772,6 +1019,17 @@ function openRowMenu(anchor, key, row) {
     menu.appendChild(b);
   };
 
+  add("History", () => openHistory(key));
+  // Extend only makes sense for a key that has an expiry - the server
+  // refuses it for a never-expiring key rather than shortening it, so
+  // the menu doesn't offer it either.
+  if (row && row.expires_at) {
+    add("Extend +30 days", () => runExtend(key, 30, anchor));
+    add("Extend +1 year", () => runExtend(key, 365, anchor));
+  }
+  const sep0 = document.createElement("div");
+  sep0.className = "sep";
+  menu.appendChild(sep0);
   if (row && row.hwid) add("Reset device", () => runAction("reset-hwid", key, anchor));
   if (row && row.status === "banned") add("Unban key", () => runAction("unban", key, anchor));
   else add("Ban key", () => runAction("ban", key, anchor), true);
@@ -865,6 +1123,23 @@ async function runAction(action, key, btn) {
     loadPage(currentPage);
   } catch (e) {
     if (e.message !== "unauthorized") toast(e.message, "err");
+    btn.disabled = false;
+  }
+}
+
+async function runExtend(key, days, btn) {
+  btn.disabled = true;
+  try {
+    const r = await api(`/admin/licenses/${encodeURIComponent(key)}/extend`, {
+      method: "POST",
+      body: JSON.stringify({ days }),
+    });
+    toast(`Extended to ${fmtDate(r.expires_at)}.`);
+    refreshStats().catch(() => {});
+    loadPage(currentPage);
+  } catch (e) {
+    if (e.message !== "unauthorized") toast(e.message, "err");
+  } finally {
     btn.disabled = false;
   }
 }
@@ -964,9 +1239,12 @@ const newKeyPicker = buildPicker({
   previewEl: document.getElementById("newKeyPreview"),
 });
 
+const newKeyCount = document.getElementById("newKeyCount");
+
 function openNewKeyModal() {
   newKeyResult.innerHTML = "";
   newKeyResult.className = "";
+  newKeyCount.value = "1";
   newKeyPicker.reset(0);
   newKeyModal.classList.remove("hidden");
 }
@@ -982,22 +1260,51 @@ newKeyModal.addEventListener("click", (e) => { if (e.target === newKeyModal) clo
 
 document.getElementById("newKeyCreate").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
+  const count = Math.round(Number(newKeyCount.value));
+  if (!Number.isInteger(count) || count < 1 || count > 100) {
+    toast("Pick between 1 and 100 keys.", "err");
+    return;
+  }
   btn.disabled = true;
   try {
-    const created = await api("/admin/licenses", {
-      method: "POST",
-      body: JSON.stringify(newKeyPicker.payload()),
-    });
-    const expiryLine = created.expires_at
-      ? `Expires ${escapeHtml(fmtDate(created.expires_at))}`
-      : "Never expires";
+    // A single key still uses the original request shape (no `count`),
+    // so this keeps working against an older server.
+    const body = { ...newKeyPicker.payload(), ...(count > 1 ? { count } : {}) };
+    const result = await api("/admin/licenses", { method: "POST", body: JSON.stringify(body) });
+    const created = count > 1 ? result.created : [result];
+    const first = created[0];
+    const expiryLine = first.expires_at ? `Expires ${escapeHtml(fmtDate(first.expires_at))}` : "Never expires";
+
     newKeyResult.className = "new-key-result";
-    newKeyResult.innerHTML =
-      `<div class="rk">${expiryLine} &middot; click the key to copy it</div>` +
-      `<span class="key-chip" data-copy-key="${escapeHtml(created.license_key)}" title="Click to copy">${escapeHtml(created.license_key)}</span>`;
-    newKeyResult.querySelector("[data-copy-key]")
-      .addEventListener("click", (ev) => copyKey(ev.currentTarget.dataset.copyKey));
-    toast("Key created.");
+    if (created.length === 1) {
+      newKeyResult.innerHTML =
+        `<div class="rk">${expiryLine} &middot; click the key to copy it</div>` +
+        `<span class="key-chip" data-copy-key="${escapeHtml(first.license_key)}" title="Click to copy">${escapeHtml(first.license_key)}</span>`;
+    } else {
+      newKeyResult.innerHTML =
+        `<div class="rk">${created.length} keys &middot; ${expiryLine}</div>` +
+        `<div class="key-list">${created.map((k) =>
+          `<span class="key-chip" data-copy-key="${escapeHtml(k.license_key)}" title="Click to copy">${escapeHtml(k.license_key)}</span>`).join("")}</div>` +
+        `<div class="result-actions">` +
+        `<button type="button" class="btn-ghost" id="copyAllKeys">Copy all</button>` +
+        `<button type="button" class="btn-ghost" id="downloadKeys">Download .txt</button>` +
+        `</div>`;
+      // One key per line - pastes straight into a Discord message or a
+      // shop's stock field.
+      const text = created.map((k) => k.license_key).join("\n") + "\n";
+      document.getElementById("copyAllKeys").addEventListener("click", () => {
+        navigator.clipboard?.writeText(text).then(
+          () => toast(`${created.length} keys copied.`),
+          () => toast("Couldn't copy - use Download instead.", "err")
+        );
+      });
+      document.getElementById("downloadKeys").addEventListener("click", () => {
+        downloadBlob(new Blob([text], { type: "text/plain" }), `keys-${new Date().toISOString().slice(0, 10)}.txt`);
+      });
+    }
+    newKeyResult.querySelectorAll("[data-copy-key]").forEach((el) =>
+      el.addEventListener("click", (ev) => copyKey(ev.currentTarget.dataset.copyKey)));
+    toast(created.length === 1 ? "Key created." : `${created.length} keys created.`);
   } catch (err) {
     if (err.message !== "unauthorized") toast(err.message, "err");
   } finally {
@@ -1052,6 +1359,7 @@ document.getElementById("expirySave").addEventListener("click", async (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (openMenuEl) closeRowMenu();
+  else if (!historyModal.classList.contains("hidden")) closeHistory();
   else if (!expiryModal.classList.contains("hidden")) closeExpiryModal();
   else if (!newKeyModal.classList.contains("hidden")) closeNewKeyModal();
 });
