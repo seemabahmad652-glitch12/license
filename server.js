@@ -437,7 +437,7 @@ app.use(
 // signed installer(s) it points to) into this folder - no server
 // code changes, no restart needed, same deploy as the licensing API.
 // See license-server/updates/README.md for the manifest format and
-// how to sign a release; see the main README's "Auto-updates" section
+// how to sign a release; see the app's CLAUDE.md "Updates" section
 // for how the desktop side consumes it.
 app.use(
   "/updates",

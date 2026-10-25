@@ -3,7 +3,7 @@
 This folder is served as-is at `https://license.lootbloxy.com/updates/`
 (see the `/updates` static mount in `server.js`). The desktop app's
 updater checks `latest.json` here on every launch - see the main
-project README's "Auto-updates" section for how that works from the
+app's CLAUDE.md ("Updates") for how that works from the
 Rust/UI side. This file is just about producing and publishing a new
 release.
 
