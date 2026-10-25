@@ -27,6 +27,14 @@ private key - losing it means every installed copy of the app can
 never accept another update, short of everyone manually reinstalling
 with a new pubkey baked in.
 
+## Lost the private key?
+
+`.\release.ps1 -NewKey` makes a new keypair and puts its public half
+into `tauri.conf.json`. Any copy already installed with the old public
+key will refuse updates signed by the new one, so those users install
+the next version by hand, once; everything built from then on updates
+normally. Back the new key up somewhere that isn't this repo.
+
 ## Every release after that: `release.ps1`
 
 From the AfkStrike project folder, in PowerShell:
