@@ -38,12 +38,16 @@ normally. Back the new key up somewhere that isn't this repo.
 ## Every release: double-click `release.cmd`
 
 In the AfkStrike project folder, double-click **`release.cmd`**. It asks
-two things:
+one thing - **what's new** (one line; separate items with `;` and each
+becomes a tick in the update window). The version is automatic:
 
-1. **New version** - the next number is filled in; press Enter.
-2. **What's new** - one line; it's shown in the update window.
+- **Nothing published yet:** it releases the version the app already has
+  (0.1.0) - no bump.
+- **After that:** the next number after what's live (0.1.0 -> 0.1.1 ->
+  0.1.2 ...). To jump further, change `version` in `tauri.conf.json` (and
+  `Cargo.toml`) first, or run `release.cmd -Version 0.2.0`.
 
-Then it bumps the version, builds and signs the installer, copies it
+Then it sets the version, builds and signs the installer, copies it
 here with a fresh `latest.json`, and pushes this repo. Railway redeploys
 in about a minute, and every installed copy offers the update the next
 time it starts. It asks for the signing key's password during the build.
