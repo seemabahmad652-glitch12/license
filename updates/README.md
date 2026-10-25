@@ -27,52 +27,60 @@ private key - losing it means every installed copy of the app can
 never accept another update, short of everyone manually reinstalling
 with a new pubkey baked in.
 
-## Every release after that
+## Every release after that: `release.ps1`
 
-1. **Bump the version** in `src-tauri/Cargo.toml` (`version = "..."`)
-   and `src-tauri/tauri.conf.json` (`"version": "..."`) - these two
-   must match.
-2. **Build the installer**:
-   ```bash
-   cargo tauri build
-   ```
-   This produces an `.exe` (NSIS) and/or `.msi` under
-   `src-tauri/target/release/bundle/`.
-3. **Sign it** with the private key from setup:
-   ```bash
-   cargo tauri signer sign -k ~/.tauri/afkstrike-update.key \
-     path/to/AfkStrike_<version>_x64-setup.exe
-   ```
-   This writes a `.sig` file next to the installer - its contents are
-   the `signature` value for the manifest below (not the file path,
-   the actual text inside the `.sig` file).
-4. **Upload the installer itself** into this `updates/` folder (so it
-   ends up at `https://license.lootbloxy.com/updates/<filename>`) -
-   commit it to the repo (if this folder is small/occasional) or
-   upload it directly to the running Railway volume/deploy, whichever
-   this project's deploy process already uses for `license-server`.
-5. **Update `latest.json`** in this folder:
+From the AfkStrike project folder, in PowerShell:
+
+```powershell
+.\release.ps1 -Version 0.2.0 -Notes "Auto replies and a faster sniper" -Push
+```
+
+It bumps the version in `tauri.conf.json` and `Cargo.toml`, runs
+`cargo tauri build` (which signs the installer itself - `tauri.conf.json`
+has `"createUpdaterArtifacts": true`), copies
+`AfkStrike_<version>_x64-setup.exe` into this folder, writes
+`latest.json` with the signature, keeps only the last two installers,
+and with `-Push` commits and pushes this repo. Railway redeploys, and
+every installed copy offers the update the next time it starts.
+
+- The signing key is read from `~/.tauri/afkstrike-update.key` (or
+  `-KeyPath`, or an existing `TAURI_SIGNING_PRIVATE_KEY`). It asks for
+  the key's password.
+- `-LicenseRepo` is your clone of this repo; it defaults to a
+  `license` folder next to the project.
+- Leave out `-Push` to look at the files first; it prints the three git
+  commands to run.
+- The version must be higher than the current one - an installed copy
+  only ever moves up.
+
+### By hand, if you'd rather
+
+1. Bump `version` in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`
+   (they must match).
+2. Set `TAURI_SIGNING_PRIVATE_KEY` (the key file's contents or path) and
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, then `cargo tauri build`. You get
+   `src-tauri/target/release/bundle/nsis/AfkStrike_<version>_x64-setup.exe`
+   and, next to it, `...setup.exe.sig`.
+3. Copy the `.exe` into this folder.
+4. Update `latest.json` here - the `signature` is the text inside the
+   `.sig` file, not its path:
    ```json
    {
      "version": "<new version, no leading v>",
-     "notes": "<short changelog line shown in the update modal>",
-     "pub_date": "<UTC timestamp, e.g. 2026-03-01T12:00:00Z>",
+     "notes": "<one line shown in the update window>",
+     "pub_date": "<UTC, e.g. 2026-11-01T12:00:00Z>",
      "platforms": {
        "windows-x86_64": {
-         "signature": "<contents of the .sig file from step 3>",
+         "signature": "<contents of the .sig file>",
          "url": "https://license.lootbloxy.com/updates/<installer filename>"
        }
      }
    }
    ```
-   The `windows-x86_64` key must match the target the installer was
-   built for - this project only ships Windows builds (`nsis`/`msi` in
-   `tauri.conf.json`'s `bundle.targets`), so that's the only platform
-   key this manifest needs.
-6. **Deploy** (push/redeploy `license-server` the same way as any
-   other change to it). The next time anyone launches the app, their
-   copy's `current_version` (whatever they're running) will be older
-   than this `version`, and the update modal will offer it.
+   Save it as UTF-8 **without** a byte-order mark (Notepad's "UTF-8", not
+   "UTF-8 with BOM") - the updater won't read a manifest that starts with
+   one.
+5. Commit and push this repo; Railway redeploys.
 
 ## Testing locally
 
