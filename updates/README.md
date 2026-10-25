@@ -35,36 +35,38 @@ key will refuse updates signed by the new one, so those users install
 the next version by hand, once; everything built from then on updates
 normally. Back the new key up somewhere that isn't this repo.
 
-## Every release after that: `release.ps1`
+## Every release: double-click `release.cmd`
 
-Run it through `release.cmd` (same arguments). Windows refuses to run a
-`.ps1` that came out of a downloaded zip ("is not digitally signed");
-`release.cmd` runs it with that check bypassed for this one run only,
-without changing the machine's script policy.
+In the AfkStrike project folder, double-click **`release.cmd`**. It asks
+two things:
 
-From the AfkStrike project folder, in PowerShell:
+1. **New version** - the next number is filled in; press Enter.
+2. **What's new** - one line; it's shown in the update window.
+
+Then it bumps the version, builds and signs the installer, copies it
+here with a fresh `latest.json`, and pushes this repo. Railway redeploys
+in about a minute, and every installed copy offers the update the next
+time it starts. It asks for the signing key's password during the build.
+
+The first time it runs it also:
+- downloads this repo next to the project (and remembers where, in
+  `release.config.json`), and
+- offers to make a signing key if there isn't one at
+  `~/.tauri/afkstrike-update.key`.
+
+Needs: Rust + `cargo install tauri-cli --version "^2.12" --locked`, and
+Git signed in to GitHub.
+
+Command-line form, same thing without the questions:
 
 ```powershell
 .\release.cmd -Version 0.2.0 -Notes "Auto replies and a faster sniper" -Push
 ```
 
-It bumps the version in `tauri.conf.json` and `Cargo.toml`, runs
-`cargo tauri build` (which signs the installer itself - `tauri.conf.json`
-has `"createUpdaterArtifacts": true`), copies
-`AfkStrike_<version>_x64-setup.exe` into this folder, writes
-`latest.json` with the signature, keeps only the last two installers,
-and with `-Push` commits and pushes this repo. Railway redeploys, and
-every installed copy offers the update the next time it starts.
-
-- The signing key is read from `~/.tauri/afkstrike-update.key` (or
-  `-KeyPath`, or an existing `TAURI_SIGNING_PRIVATE_KEY`). It asks for
-  the key's password.
-- `-LicenseRepo` is your clone of this repo; it defaults to a
-  `license` folder next to the project.
-- Leave out `-Push` to look at the files first; it prints the three git
-  commands to run.
-- The version must be higher than the current one - an installed copy
-  only ever moves up.
+`release.cmd` runs `release.ps1` with Windows' downloaded-script check
+bypassed for that one run ("is not digitally signed" otherwise), without
+changing any system setting. Leave out `-Push` to look at the files
+before publishing.
 
 ### By hand, if you'd rather
 
