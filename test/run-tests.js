@@ -217,6 +217,36 @@ async function main() {
     for (let i = 0; i < 32; i++) if ((await verify("AAAAA-BBBBB-CCCCC-DDDDD", "x", {}, `${i}.${i}.${i}.${i}, 198.51.100.7`)).status === 429) spoofed++;
     check("a spoofed left-most X-Forwarded-For doesn't evade it", spoofed === 2, spoofed);
 
+    section("Compression and caching");
+    const raw = (p, headers = {}) => new Promise((resolve, reject) => {
+      require("http").get(`${BASE}${p}`, { headers }, (r) => {
+        const chunks = [];
+        r.on("data", (c) => chunks.push(c));
+        r.on("end", () => resolve({ status: r.statusCode, headers: r.headers, body: Buffer.concat(chunks) }));
+      }).on("error", reject);
+    });
+    const zlib = require("zlib");
+    for (let i = 0; i < 30; i++) await admin("POST", "/admin/licenses", { note: `bulk filler ${i}` });
+    const plainList = await raw("/admin/licenses", { "x-admin-secret": ADMIN });
+    const gzList = await raw("/admin/licenses", { "x-admin-secret": ADMIN, "accept-encoding": "gzip" });
+    check("key list is gzipped when asked", gzList.headers["content-encoding"] === "gzip");
+    check("...and decompresses to the same JSON", zlib.gunzipSync(gzList.body).equals(plainList.body));
+    check("...with a matching Content-Length", Number(gzList.headers["content-length"]) === gzList.body.length);
+    check("...much smaller", gzList.body.length < plainList.body.length / 3, [gzList.body.length, plainList.body.length]);
+    check("not gzipped when not asked", !plainList.headers["content-encoding"] && JSON.parse(plainList.body).length > 30);
+    check("Vary: Accept-Encoding set", /accept-encoding/i.test(gzList.headers["vary"] || ""));
+    const page = await raw("/", { "accept-encoding": "gzip" });
+    check("admin page gzipped", page.headers["content-encoding"] === "gzip" && zlib.gunzipSync(page.body).toString().includes("<html"));
+    check("admin page revalidates (no-cache)", page.headers["cache-control"] === "no-cache");
+    const logo = await raw("/logo.png", { "accept-encoding": "gzip" });
+    check("logo not gzipped (already compressed), cached a day", !logo.headers["content-encoding"] && logo.headers["cache-control"] === "public, max-age=86400" && logo.body[1] === 0x50);
+    const small = await raw("/health", { "accept-encoding": "gzip" });
+    check("tiny responses left uncompressed", !small.headers["content-encoding"] && JSON.parse(small.body).status === "ok");
+    const manifest = await raw("/updates/latest.json", { "accept-encoding": "gzip" });
+    check("update manifest still no-store", manifest.headers["cache-control"] === "no-store" && manifest.status === 200);
+    const v = await verify("AFK-ZZZZ-ZZZZ-ZZZZ", "nope");
+    check("verify still answers with parsed JSON through the gzip layer", v.body && v.body.success === false && v.body.message === "Invalid license key.", v);
+
     const errs = srv.log().split("\n").filter((l) => /error/i.test(l));
     check("server logged no errors", errs.length === 0, errs.slice(0, 3));
   } finally {

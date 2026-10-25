@@ -24,6 +24,7 @@
 
 const crypto = require("crypto");
 const path = require("path");
+const zlib = require("zlib");
 const express = require("express");
 const { Pool } = require("pg");
 
@@ -351,6 +352,65 @@ app.use((_req, res, next) => {
   next();
 });
 
+// gzip for text responses: the admin page, the key list, CSV exports,
+// update manifests. The key list and export grow with every key sold,
+// and JSON/HTML/CSV shrink 70-90% compressed, so this is most of the
+// page-load time on a slow connection. Built on Node's own zlib rather
+// than the `compression` package - nothing new to install or audit.
+//
+// It decides on the first write, once the route has set its
+// content-type: compressible bodies of 1 KB or more are buffered and
+// gzipped (every one of these is small enough to hold in memory);
+// anything else - the installers under /updates especially - streams
+// straight through untouched, never buffered.
+const COMPRESSIBLE = /json|text\/|javascript|svg|csv|xml/i;
+function gzipResponses(req, res, next) {
+  if (req.method === "HEAD" || !/\bgzip\b/i.test(req.headers["accept-encoding"] || "")) return next();
+  const write = res.write.bind(res);
+  const end = res.end.bind(res);
+  let mode = null; // null = undecided, "buffer", "pass"
+  const chunks = [];
+  const toBuf = (chunk, enc) =>
+    Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, typeof enc === "string" ? enc : "utf8");
+  const decide = () => {
+    if (mode) return;
+    const type = String(res.getHeader("content-type") || "");
+    mode = !res.headersSent && !res.getHeader("content-encoding") && COMPRESSIBLE.test(type) ? "buffer" : "pass";
+  };
+  res.write = (chunk, enc, cb) => {
+    decide();
+    if (mode === "pass") return write(chunk, enc, cb);
+    if (chunk != null && typeof chunk !== "function") chunks.push(toBuf(chunk, enc));
+    const done = typeof enc === "function" ? enc : cb;
+    if (typeof done === "function") process.nextTick(done);
+    return true;
+  };
+  res.end = (chunk, enc, cb) => {
+    decide();
+    if (mode === "pass") return end(chunk, enc, cb);
+    if (chunk != null && typeof chunk !== "function") chunks.push(toBuf(chunk, enc));
+    const done = [chunk, enc, cb].find((f) => typeof f === "function");
+    const body = Buffer.concat(chunks);
+    // Vary on every compressible response, compressed or not, so a cache
+    // never hands a gzipped body to a client that didn't ask for one.
+    res.setHeader("Vary", "Accept-Encoding");
+    if (body.length < 1024 || res.statusCode === 204 || res.statusCode === 304) {
+      if (body.length) res.setHeader("Content-Length", body.length);
+      return end(body, done);
+    }
+    const gz = zlib.gzipSync(body, { level: 6 });
+    res.setHeader("Content-Encoding", "gzip");
+    res.setHeader("Content-Length", gz.length);
+    // A strong ETag names the uncompressed bytes; marked weak once the
+    // representation changes, which is what HTTP asks for.
+    const etag = res.getHeader("etag");
+    if (typeof etag === "string" && !etag.startsWith("W/")) res.setHeader("ETag", `W/${etag}`);
+    return end(gz, done);
+  };
+  next();
+}
+app.use(gzipResponses);
+
 // Serves the admin dashboard out of public/ (index.html plus the app
 // logo it shows as its mark and favicon). express.static calls
 // next() for any request that doesn't match a real file under here,
@@ -359,7 +419,16 @@ app.use((_req, res, next) => {
 // secret - it's static HTML/CSS/JS, and the admin secret is typed in
 // by whoever opens it and sent only as a header on the API calls it
 // makes from there, same as curl would.
-app.use(express.static(path.join(__dirname, "public")));
+app.use(
+  express.static(path.join(__dirname, "public"), {
+    // The page itself is revalidated on every load (cheap - an ETag
+    // check), so a deploy reaches the dashboard at once; the logo is
+    // fine cached for a day.
+    setHeaders: (res, filePath) => {
+      res.setHeader("Cache-Control", filePath.endsWith(".html") ? "no-cache" : "public, max-age=86400");
+    },
+  })
+);
 
 // Auto-updates: the desktop app's Tauri updater plugin GETs
 // /updates/latest.json on every launch and, for whichever platform
