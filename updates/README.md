@@ -29,7 +29,7 @@ with a new pubkey baked in.
 
 ## Lost the private key?
 
-`.\release.ps1 -NewKey` makes a new keypair and puts its public half
+`.\release.cmd -NewKey` makes a new keypair and puts its public half
 into `tauri.conf.json`. Any copy already installed with the old public
 key will refuse updates signed by the new one, so those users install
 the next version by hand, once; everything built from then on updates
@@ -37,10 +37,15 @@ normally. Back the new key up somewhere that isn't this repo.
 
 ## Every release after that: `release.ps1`
 
+Run it through `release.cmd` (same arguments). Windows refuses to run a
+`.ps1` that came out of a downloaded zip ("is not digitally signed");
+`release.cmd` runs it with that check bypassed for this one run only,
+without changing the machine's script policy.
+
 From the AfkStrike project folder, in PowerShell:
 
 ```powershell
-.\release.ps1 -Version 0.2.0 -Notes "Auto replies and a faster sniper" -Push
+.\release.cmd -Version 0.2.0 -Notes "Auto replies and a faster sniper" -Push
 ```
 
 It bumps the version in `tauri.conf.json` and `Cargo.toml`, runs
