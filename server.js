@@ -141,28 +141,6 @@ async function migrate() {
   // the same PC after a small change instead of calling it "another
   // device" - see afk_parts_match.
   await pool.query(`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS hw_parts JSONB;`);
-  // One-time wipe of every key and its history, asked for by the owner
-  // (2026-10-26). Runs only when WIPE_ALL_LICENSES is set to this exact
-  // value, and only once ever: the marker row makes a restart harmless.
-  if (process.env.WIPE_ALL_LICENSES === "wipe-2026-10-26") {
-    await pool.query(`CREATE TABLE IF NOT EXISTS afk_maintenance (name TEXT PRIMARY KEY, done_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
-    // One statement, so it's atomic: all of it happens or none.
-    const { rows } = await pool.query(
-      `WITH mark AS (
-         INSERT INTO afk_maintenance (name) VALUES ('wipe-2026-10-26') ON CONFLICT DO NOTHING RETURNING 1
-       ), ev AS (
-         DELETE FROM license_events WHERE EXISTS (SELECT 1 FROM mark) RETURNING 1
-       ), lic AS (
-         DELETE FROM licenses WHERE EXISTS (SELECT 1 FROM mark) RETURNING 1
-       )
-       SELECT (SELECT count(*) FROM mark)::int AS ran,
-              (SELECT count(*) FROM lic)::int AS licenses,
-              (SELECT count(*) FROM ev)::int AS events`
-    );
-    console.log(rows[0].ran
-      ? `One-time wipe: deleted ${rows[0].licenses} licenses and ${rows[0].events} events.`
-      : "One-time wipe already done - skipped.");
-  }
   // "banned" was retired (Revoke does the same job).
   await pool.query(`UPDATE licenses SET status = 'revoked' WHERE status NOT IN ('active', 'revoked');`);
   // Same PC = same Windows install (MachineGuid, "mg") plus at least two
