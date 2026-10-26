@@ -12,7 +12,7 @@
 // this endpoint - the actual security boundary is "does this key exist,
 // is it active, and does its bound hwid (if any) match" against this
 // server's own Postgres database, which never leaves this process.
-// Admin routes (create/list/revoke/ban/reset a license) are a second,
+// Admin routes (create/list/revoke/reset a license) are a second,
 // separate secret (ADMIN_SECRET) - never shipped in the desktop app at
 // all, only used by you (or a storefront's backend, if you build one
 // later) to issue keys after a sale. `public/index.html` is a small,
@@ -141,6 +141,8 @@ async function migrate() {
   // the same PC after a small change instead of calling it "another
   // device" - see afk_parts_match.
   await pool.query(`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS hw_parts JSONB;`);
+  // "banned" was retired (Revoke does the same job).
+  await pool.query(`UPDATE licenses SET status = 'revoked' WHERE status NOT IN ('active', 'revoked');`);
   // Same PC = same Windows install (MachineGuid, "mg") plus at least two
   // more matching parts. A rename, a CPU swap or a new disk passes; a
   // different PC - or a fresh Windows install, which needs a reset - doesn't.
@@ -222,14 +224,13 @@ function safeEqual(a, b) {
 // about 7.9e17 keys. Against /verify's limit of 30 checks a minute per
 // address, guessing one is not a thing that happens.
 //
-// Keys issued before this were `XXXXX-XXXXX-XXXXX-XXXXX`. Those are NOT
-// migrated and keep working unchanged: /verify matches the stored key
-// string exactly and never parses its shape, so a key's format is only
-// ever decided here, at creation.
+// This is the only format: /verify refuses anything else without a
+// database round trip (KEY_SHAPE below).
 const KEY_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const KEY_PREFIX = "AFK";
 const KEY_GROUPS = 3;
 const KEY_GROUP_LEN = 4;
+const KEY_SHAPE = new RegExp(`^${KEY_PREFIX}(-[${KEY_ALPHABET}]{${KEY_GROUP_LEN}}){${KEY_GROUPS}}$`);
 
 /// Uniform over the alphabet. `crypto.randomInt` rejection-samples
 /// internally; the previous `byte % 31` gave the first eight letters a
@@ -367,6 +368,18 @@ app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
+  // What `helmet` would add, without the dependency. The dashboard is one
+  // self-contained page (inline script and style, nothing external), so
+  // the policy allows exactly that and nothing from anywhere else.
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; " +
+      "form-action 'self'; frame-ancestors 'none'"
+  );
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
   next();
 });
 
@@ -454,9 +467,8 @@ app.use(
 // new release is just dropping an updated latest.json (and the
 // signed installer(s) it points to) into this folder - no server
 // code changes, no restart needed, same deploy as the licensing API.
-// See license-server/updates/README.md for the manifest format and
-// how to sign a release; see the app's CLAUDE.md "Updates" section
-// for how the desktop side consumes it.
+// release.cmd (in the app project) writes the manifest and installers;
+// see the app's CLAUDE.md "Updates" section for how it all fits together.
 app.use(
   "/updates",
   express.static(path.join(__dirname, "updates"), {
@@ -592,7 +604,7 @@ async function checkVerifyStatement() {
 // `parts` that afk_parts_match recognises) - decided here, against this
 // database, not by anything the client says about itself.
 //
-// A key is at most 23 characters and a hwid 32; capped generously, but
+// A key is 18 characters and a hwid 32; capped generously, but
 // capped, since this is reachable with only the shared client secret.
 const MAX_FIELD_LEN = 128;
 const PART_NAME = /^[a-z]{1,12}$/;
@@ -624,6 +636,10 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   if (key.length > MAX_FIELD_LEN || hwid.length > MAX_FIELD_LEN) {
     return res.status(400).json({ success: false, message: "Malformed key or hwid." });
   }
+  // Not a key this server could have issued: no database work at all.
+  if (!KEY_SHAPE.test(key)) {
+    return res.json({ success: false, message: "Invalid license key." });
+  }
   const parts = cleanParts(req.body.parts);
 
   // One statement decides everything (see VERIFY_SQL):
@@ -640,7 +656,7 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   if (!license) {
     return res.json({ success: false, message: "Invalid license key." });
   }
-  if (license.status === "revoked" || license.status === "banned") {
+  if (license.status !== "active") {
     return res.json({ success: false, message: "This license key has been revoked." });
   }
   // Before the device check: an expired key on another PC should say it
@@ -737,7 +753,7 @@ app.post("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res
 // straight to the column; the rest are derived views a person thinks in
 // ("expiring soon", "online now", "never used") that are really
 // conditions on timestamps.
-const LICENSE_STATUSES = ["active", "revoked", "banned"];
+const LICENSE_STATUSES = ["active", "revoked"];
 const DERIVED_FILTERS = {
   expired: `expires_at IS NOT NULL AND expires_at <= now()`,
   expiring: `status = 'active' AND expires_at > now() AND expires_at <= now() + interval '7 days'`,
@@ -796,7 +812,6 @@ app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (_req, res) =
             count(hwid)::int                                                    AS bound,
             (count(*) FILTER (WHERE status = 'active'))::int                    AS active,
             (count(*) FILTER (WHERE status = 'revoked'))::int                   AS revoked,
-            (count(*) FILTER (WHERE status = 'banned'))::int                    AS banned,
             (count(*) FILTER (WHERE ${DERIVED_FILTERS.expired}))::int           AS expired,
             (count(*) FILTER (WHERE ${DERIVED_FILTERS.expiring}))::int          AS expiring_soon,
             (count(*) FILTER (WHERE ${DERIVED_FILTERS.online}))::int            AS online,
@@ -811,14 +826,14 @@ app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (_req, res) =
                FROM license_events WHERE created_at > now() - interval '24 hours') ev
       GROUP BY ev.activations_24h, ev.device_rejections_24h, ev.device_updates_24h`
   );
-  const r = rows[0] || { total: 0, bound: 0, active: 0, revoked: 0, banned: 0, expired: 0, expiring_soon: 0,
+  const r = rows[0] || { total: 0, bound: 0, active: 0, revoked: 0, expired: 0, expiring_soon: 0,
     online: 0, never_used: 0, created_7d: 0, activations_24h: 0, device_rejections_24h: 0, device_updates_24h: 0 };
   res.json({
     total: r.total,
     bound: r.bound,
     unbound: r.total - r.bound,
     expired: r.expired,
-    byStatus: { active: r.active, revoked: r.revoked, banned: r.banned },
+    byStatus: { active: r.active, revoked: r.revoked },
     expiringSoon: r.expiring_soon,
     online: r.online,
     neverUsed: r.never_used,
@@ -883,21 +898,17 @@ app.get("/admin/export.csv", adminLimiter, requireAdminSecret, ah(async (req, re
 }));
 
 // Status changes. Each is one statement that both makes the change and
-// records it. `revoke`/`ban` are distinct to /verify (each has its own
-// rejection message) - see the note that used to live here: nothing else
-// treats them differently, ban is just the harder, more deliberate one.
+// records it.
 for (const [action, toStatus] of [
   ["revoke", "revoked"],
   ["unrevoke", "active"],
-  ["ban", "banned"],
-  ["unban", "active"],
 ]) {
   app.post(`/admin/licenses/:key/${action}`, adminLimiter, requireAdminSecret, ah(async (req, res) => {
     const changed = await mutateAndLog(
       req,
       `UPDATE licenses SET status = $2 WHERE license_key = $1 RETURNING license_key`,
       [req.params.key, toStatus],
-      action === "unrevoke" || action === "unban" ? "reactivated" : toStatus
+      action === "unrevoke" ? "reactivated" : toStatus
     );
     if (changed === 0) return res.status(404).json({ error: "No license with that key." });
     res.json({ ok: true });

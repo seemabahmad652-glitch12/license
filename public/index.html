@@ -59,7 +59,7 @@
     --bad: #ff6b6b;
     --bad-soft: rgba(255, 107, 107, 0.13);
     /* Expiry is a lapse, not a punishment - it reads grey rather than
-       red so it is visually distinct from a ban at a glance. */
+       red so it is visually distinct from a revoked key at a glance. */
     --lapsed: #8b8398;
     --lapsed-soft: rgba(139, 131, 152, 0.15);
 
@@ -205,7 +205,6 @@
   .meter span { display: block; transition: width 0.4s var(--ease); min-width: 0; }
   .meter .seg-active { background: var(--ok); }
   .meter .seg-revoked { background: var(--warn); }
-  .meter .seg-banned { background: var(--bad); }
 
   .legend { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 15px; }
   .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
@@ -213,7 +212,6 @@
   .legend-item b { color: var(--text); font-weight: 600; }
   .dot-active { background: var(--ok); }
   .dot-revoked { background: var(--warn); }
-  .dot-banned { background: var(--bad); }
   .dot-expired { background: var(--lapsed); }
   .dot-bound { background: var(--accent); }
 
@@ -282,7 +280,6 @@
   .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
   .pill-active { color: var(--ok); background: var(--ok-soft); }
   .pill-revoked { color: var(--warn); background: var(--warn-soft); }
-  .pill-banned { color: var(--bad); background: var(--bad-soft); }
   .pill-expired { color: var(--lapsed); background: var(--lapsed-soft); }
 
   .status-cell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -552,14 +549,10 @@
       <div class="meter" id="meter" aria-hidden="true">
         <span class="seg-active" id="segActive" style="width:0%"></span>
         <span class="seg-revoked" id="segRevoked" style="width:0%"></span>
-        <span class="seg-banned" id="segBanned" style="width:0%"></span>
       </div>
       <div class="legend">
         <div class="legend-item"><span class="dot dot-active"></span><b class="tnum" id="statActive">-</b> active</div>
         <div class="legend-item"><span class="dot dot-revoked"></span><b class="tnum" id="statRevoked">-</b> revoked</div>
-        <!-- Banning is gone from the dashboard (Revoke does the same job);
-             this only shows while older banned keys still exist. -->
-        <div class="legend-item hidden" id="legendBanned"><span class="dot dot-banned"></span><b class="tnum" id="statBanned">-</b> banned</div>
         <div class="legend-item"><span class="dot dot-expired"></span><b class="tnum" id="statExpired">-</b> expired</div>
         <div class="legend-item"><span class="dot dot-bound"></span><b class="tnum" id="statBound">-</b> bound to a device</div>
       </div>
@@ -605,7 +598,6 @@
         <option value="">All keys</option>
         <option value="active">Active</option>
         <option value="revoked">Revoked</option>
-        <option value="banned" id="optBanned" hidden>Banned</option>
         <option value="expired">Expired</option>
         <option value="expiring">Expiring soon</option>
         <option value="online">Online now</option>
@@ -825,11 +817,10 @@ async function refreshStats() {
   document.getElementById("statTotal").textContent = stats.total;
   document.getElementById("statActive").textContent = s.active;
   document.getElementById("statRevoked").textContent = s.revoked;
-  document.getElementById("statBanned").textContent = s.banned;
   document.getElementById("statExpired").textContent = stats.expired ?? 0;
   document.getElementById("statBound").textContent = stats.bound;
 
-  // active/revoked/banned are mutually exclusive and sum to total, so
+  // active/revoked are mutually exclusive and sum to total, so
   // they can share one bar honestly. `expired` and `bound` deliberately
   // are NOT segments - a key can be active and expired at the same
   // time, and adding them here would make the bar sum past 100% and
@@ -838,9 +829,6 @@ async function refreshStats() {
   const pct = (n) => (total > 0 ? (n / total) * 100 : 0);
   document.getElementById("segActive").style.width = `${pct(s.active)}%`;
   document.getElementById("segRevoked").style.width = `${pct(s.revoked)}%`;
-  document.getElementById("segBanned").style.width = `${pct(s.banned)}%`;
-  document.getElementById("legendBanned").classList.toggle("hidden", !s.banned);
-  document.getElementById("optBanned").hidden = !s.banned;
 
   // `?? 0` so this still paints against an older server that predates
   // these fields, rather than showing "undefined".
@@ -865,9 +853,7 @@ const EVENT_LABELS = {
   rejected_device:  { text: "Refused: already on another device",    tone: "bad" },
   rejected_expired: { text: "Refused: key expired",                  tone: "warn" },
   rejected_revoked: { text: "Refused: key revoked",                  tone: "warn" },
-  rejected_banned:  { text: "Refused: key banned",                   tone: "bad" },
   revoked:          { text: "Revoked",                               tone: "warn" },
-  banned:           { text: "Banned",                                tone: "bad" },
   reactivated:      { text: "Reactivated",                           tone: "ok" },
   device_reset:     { text: "Device released",                       tone: "accent" },
   expiry_changed:   { text: "Expiry changed",                        tone: "accent" },
@@ -1138,9 +1124,6 @@ function openRowMenu(anchor, key, row) {
   sep0.className = "sep";
   menu.appendChild(sep0);
   if (row && row.hwid) add("Reset device", () => runAction("reset-hwid", key, anchor));
-  // No "Ban": Revoke does the same job. A key banned before that change
-  // can still be brought back.
-  if (row && row.status === "banned") add("Reactivate key", () => runAction("unban", key, anchor));
 
   const sep = document.createElement("div");
   sep.className = "sep";
@@ -1185,7 +1168,7 @@ function rowHtml(row) {
   const exp = describeExpiry(row.expires_at);
 
   // Revoke and Expiry are the two reached for most often, so they stay
-  // inline; ban/unban, device reset and delete go behind the menu.
+  // inline; device reset and delete go behind the menu.
   const revokeBtn = row.status === "revoked"
     ? `<button data-action="unrevoke" data-key="${key}">Unrevoke</button>`
     : `<button data-action="revoke" data-key="${key}">Revoke</button>`;
@@ -1225,7 +1208,7 @@ async function runAction(action, key, btn) {
       toast("Key deleted.");
     } else {
       await api(`/admin/licenses/${encodeURIComponent(key)}/${action}`, { method: "POST" });
-      toast({ revoke: "Key revoked.", unrevoke: "Key reactivated.", unban: "Key reactivated.", "reset-hwid": "Device reset." }[action] || "Done.");
+      toast({ revoke: "Key revoked.", unrevoke: "Key reactivated.", "reset-hwid": "Device reset." }[action] || "Done.");
     }
     refreshStats().catch(() => {});
     loadPage(currentPage);

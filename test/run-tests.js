@@ -108,7 +108,7 @@ async function main() {
     const b1 = (await verify(key, "device-B")).body;
     check("second device refused", b1.success === false && /another PC/.test(b1.message), b1);
     check("first device still accepted", (await verify(key, "device-A")).body.success === true);
-    check("unknown key refused", (await verify("AAAAA-BBBBB-CCCCC-DDDDD", "x")).body.success === false);
+    check("unknown key refused", (await verify("AFK-ZZZZ-ZZZZ-ZZZZ", "x")).body.success === false);
     await admin("POST", `/admin/licenses/${key}/revoke`);
     check("revoked key refused", /revoked/.test((await verify(key, "device-A")).body.message));
     await admin("POST", `/admin/licenses/${key}/unrevoke`);
@@ -116,15 +116,9 @@ async function main() {
     check("after a device reset, a new device can bind", (await verify(key, "device-B")).body.success === true);
     check("success message", (await verify(key, "device-B")).body.message === "License activated.");
 
-    section("Keys sold before the AFK- format");
-    // Inserted directly, the way the old generator stored them - these
-    // are every key already in customers' hands, and nothing about the
-    // format change may touch them.
-    const legacy = "H7K2M-QW9XP-3NBVT-R4ZCD";
-    await sql("INSERT INTO licenses (license_key) VALUES ($1)", [legacy]);
-    check("an old-format key still activates", (await verify(legacy, "old-customer-pc")).body.success === true);
-    check("...still device-locks", (await verify(legacy, "other-pc")).body.success === false);
-    check("...and is still manageable", (await admin("POST", `/admin/licenses/${legacy}/reset-hwid`)).status === 200);
+    section("Key format");
+    check("an old-format key is refused", (await verify("H7K2M-QW9XP-3NBVT-R4ZCD", "pc")).body.message === "Invalid license key.");
+    check("lowercase / wrong-alphabet keys are refused", (await verify(key.toLowerCase(), "pc")).body.success === false && (await verify("AFK-0000-1111-IIII", "pc")).body.success === false);
     const keySet = new Set();
     for (const r of (await admin("POST", "/admin/licenses", { count: 100 })).body.created) keySet.add(r.license_key);
     check("100 new keys: all AFK- format, all distinct, no look-alikes",
@@ -197,13 +191,13 @@ async function main() {
     const rej = (await admin("GET", `/admin/licenses/${k}/events`)).body.find((e) => e.event === "rejected_device");
     check("a refusal records which device tried", rej && rej.hwid === "dev-2");
     const before = (await sql("SELECT count(*)::int AS n FROM license_events"))[0].n;
-    await verify("ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ", "x");
+    await verify("AFK-ZZZZ-YYYY-XXXX", "x");
     check("unknown keys never grow the table", (await sql("SELECT count(*)::int AS n FROM license_events"))[0].n === before);
-    await admin("POST", `/admin/licenses/${k}/ban`);
-    await admin("POST", `/admin/licenses/${k}/unban`);
+    await admin("POST", `/admin/licenses/${k}/revoke`);
+    await admin("POST", `/admin/licenses/${k}/unrevoke`);
     await admin("POST", `/admin/licenses/${k}/reset-hwid`);
     ev = await events(k);
-    check("admin changes recorded", ["banned", "reactivated", "device_reset"].every((e) => ev.includes(e)), ev);
+    check("admin changes recorded", ["revoked", "reactivated", "device_reset"].every((e) => ev.includes(e)), ev);
     const reset = (await admin("GET", `/admin/licenses/${k}/events`)).body.find((e) => e.event === "device_reset");
     check("a device reset records the released device", reset && reset.hwid === "dev-1");
     await admin("DELETE", `/admin/licenses/${keys[1]}`);
@@ -212,7 +206,7 @@ async function main() {
     section("Stats, filters, search, export");
     const st = (await admin("GET", "/admin/stats")).body;
     check("original stats fields kept", ["total", "bound", "unbound", "expired", "byStatus"].every((f) => f in st));
-    check("byStatus sums to total", st.byStatus.active + st.byStatus.revoked + st.byStatus.banned === st.total);
+    check("byStatus sums to total", st.byStatus.active + st.byStatus.revoked === st.total);
     check("online / neverUsed / activations24h present", st.online >= 1 && st.neverUsed >= 1 && st.activations24h >= 1, st);
     const soon = (await admin("POST", "/admin/licenses", { expires_in_days: 3 })).body.license_key;
     check("expiring filter", (await admin("GET", "/admin/licenses?status=expiring")).body.some((r) => r.license_key === soon));
@@ -253,6 +247,7 @@ async function main() {
     check("bulk changes are in each key's history", ["revoked", "reactivated", "device_reset"].every((e) => evs.includes(e)), evs);
     br = await admin("POST", "/admin/licenses/bulk", { action: "ban", keys: made });
     check("unknown bulk action refused", br.status === 400);
+    check("the retired /ban route is gone", (await admin("POST", `/admin/licenses/${made[0]}/ban`)).status === 404);
     br = await admin("POST", "/admin/licenses/bulk", { action: "revoke", keys: [] });
     check("empty key list refused", br.status === 400);
     br = await admin("POST", "/admin/licenses/bulk", { action: "revoke", keys: Array.from({ length: 201 }, (_, i) => `K${i}`) });

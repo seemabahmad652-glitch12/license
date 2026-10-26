@@ -7,7 +7,7 @@ auto-updater downloads. A small Node/Express app on Postgres, deployed on Railwa
 | Route | Who calls it |
 | --- | --- |
 | `POST /verify` | The desktop app: `{key, hwid, parts}`, validates a key and locks it to one PC |
-| `GET /updates/latest.json` + installers | The app's auto-updater (see `updates/README.md`) |
+| `GET /updates/latest.json` + installers | The app's auto-updater. `release.cmd` in the app project writes these (see its `UPDATING.md`) |
 | `GET /` | Admin dashboard (you, in a browser) |
 | `/admin/*` | The dashboard, or you with curl (needs `ADMIN_SECRET`) |
 | `GET /health` | Railway's healthcheck: `{"status":"ok","database":"ok"}`, 503 if Postgres is down |
@@ -48,10 +48,10 @@ instead of locking customers out.
 
 | Column | Meaning |
 | --- | --- |
-| `license_key` | `AFK-XXXX-XXXX-XXXX` (older `XXXXX-XXXXX-XXXXX-XXXXX` keys still work) |
+| `license_key` | `AFK-XXXX-XXXX-XXXX`, the only format. `/verify` refuses any other shape without touching the database |
 | `hwid` | The PC fingerprint it's locked to; `NULL` until first activation |
 | `hw_parts` | The same PC part by part (`mg`, `vol`, `cpu`, `cores`, `host`, each an opaque hash), so a small hardware change isn't "another PC" |
-| `status` | `active`, `revoked`, or `banned` (legacy; treated like revoked) |
+| `status` | `active` or `revoked` |
 | `expires_at` | `NULL` = never expires |
 | `created_at`, `last_seen_at`, `last_seen_ip` | Bookkeeping |
 
@@ -96,7 +96,6 @@ clears it.
   - inline: Revoke / Reactivate, expiry;
   - in the ⋯ menu: History, Extend +30 days / +1 year (keys that expire), Reset device,
     Delete.
-  - There is no Ban: Revoke does the same job.
 - **Bulk:** tick keys (or the header box for the page), then Copy keys, Revoke,
   Reactivate, Extend +30 days, Reset device or Delete.
 - **Activity:** recent activity across all keys. **Export CSV** of the current view.
@@ -117,7 +116,7 @@ J="Content-Type: application/json"
 curl -X POST $S/admin/licenses -H "$H" -H "$J" -d '{"expires_in_days":30}'
 curl -X POST $S/admin/licenses -H "$H" -H "$J" -d '{"count":25,"expires_in_days":30}'
 
-# list (limit, offset, status=active|revoked|banned|expired|expiring|online|unused, q=key/device/ip)
+# list (limit, offset, status=active|revoked|expired|expiring|online|unused, q=key/device/ip)
 curl -H "$H" "$S/admin/licenses?limit=50&status=online&q=203.0.113"
 
 # stats / per-day activity (days 7-90, UTC) / CSV export (same filters as list)
@@ -127,7 +126,7 @@ curl -H "$H" "$S/admin/export.csv?status=expiring" -o expiring.csv
 
 # one key
 curl -X POST   $S/admin/licenses/$K/revoke     -H "$H"
-curl -X POST   $S/admin/licenses/$K/unrevoke   -H "$H"   # back to active (also /unban)
+curl -X POST   $S/admin/licenses/$K/unrevoke   -H "$H"   # back to active
 curl -X POST   $S/admin/licenses/$K/reset-hwid -H "$H"   # let it activate on a new PC
 curl -X POST   $S/admin/licenses/$K/extend     -H "$H" -H "$J" -d '{"days":30}'
 curl -X POST   $S/admin/licenses/$K/expiry     -H "$H" -H "$J" -d '{"expires_in_days":30}'  # or {"expires_at":null}
@@ -149,7 +148,6 @@ curl -X POST $S/admin/licenses/bulk -H "$H" -H "$J" \
 - **Bulk** replies `{ok, requested, changed}`. Keys already in the target state are
   skipped.
 - **CSV** cells that start with `= + - @` are prefixed with `'` (formula-injection guard).
-- `/admin/licenses/:key/ban` still exists for compatibility.
 
 ## Hardening
 
