@@ -135,6 +135,24 @@ async function migrate() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS license_events_key_idx ON license_events (license_key, created_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS license_events_created_idx ON license_events (created_at DESC);`);
+
+  // The device a key is locked to, part by part: {mg, vol, cpu, cores,
+  // host}, each an opaque hash the app computes. Lets /verify recognise
+  // the same PC after a small change instead of calling it "another
+  // device" - see afk_parts_match.
+  await pool.query(`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS hw_parts JSONB;`);
+  // Same PC = same Windows install (MachineGuid, "mg") plus at least two
+  // more matching parts. A rename, a CPU swap or a new disk passes; a
+  // different PC - or a fresh Windows install, which needs a reset - doesn't.
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION afk_parts_match(stored jsonb, sent jsonb) RETURNS boolean
+    LANGUAGE sql IMMUTABLE AS $fn$
+      SELECT COALESCE(
+        stored ? 'mg' AND sent ? 'mg' AND stored->>'mg' = sent->>'mg'
+        AND (SELECT count(*) FROM jsonb_each_text(stored) s WHERE sent->>s.key = s.value) >= 3,
+        false)
+    $fn$;
+  `);
 }
 
 // How long per-key history is kept. Long enough to cover a chargeback
@@ -507,15 +525,14 @@ const VERIFY_SQL = `WITH found AS (
        UPDATE licenses l
           SET last_seen_at = now(),
               last_seen_ip = $3,
-              -- Always the NEW id, not COALESCE: this is both the
-              -- first-time bind and the legacy-to-fingerprint
-              -- migration, and after it the old value no longer
-              -- unlocks anything.
-              hwid = $2
+              -- Always the NEW digest: this is the first-time bind, and
+              -- the rebind when the same PC changed a little.
+              hwid = $2,
+              hw_parts = COALESCE($4::jsonb, l.hw_parts)
         WHERE l.id = (SELECT id FROM found)
           AND l.status = 'active'
           AND (l.expires_at IS NULL OR l.expires_at > now())
-          AND (l.hwid IS NULL OR l.hwid = $2 OR ($4 <> '' AND l.hwid = $4))
+          AND (l.hwid IS NULL OR l.hwid = $2 OR afk_parts_match(l.hw_parts, $4::jsonb))
        RETURNING l.id
      ), outcome AS (
        SELECT f.status,
@@ -526,29 +543,24 @@ const VERIFY_SQL = `WITH found AS (
               (SELECT count(*) FROM upd)::int AS updated
          FROM found f
      ), classified AS (
-       -- Which event (if any) this check is worth recording. Computed
-       -- once, here, and the INSERT below filters on it being non-null -
-       -- so "should this be logged" and "what is logged" can never
-       -- disagree. (Repeating the conditions in a separate WHERE would
-       -- risk a NULL event slipping through, and a NOT NULL violation
-       -- would fail the whole statement - i.e. lock a customer out over
-       -- a logging bug.) Order matters: an expired key on the wrong
-       -- device is recorded as expired, matching the message returned.
+       -- Which event (if any) this check is worth recording - computed
+       -- once, and the INSERT filters on it being non-null, so "should
+       -- this be logged" and "what is logged" can't disagree. Order
+       -- matters: an expired key on the wrong PC is recorded as expired,
+       -- matching the message returned.
        SELECT o.*,
               CASE
                 WHEN o.status <> 'active' THEN 'rejected_' || o.status
                 WHEN o.is_expired         THEN 'rejected_expired'
                 WHEN o.updated = 0        THEN 'rejected_device'
                 WHEN o.was_unbound        THEN 'activated'
-                WHEN $4 <> '' AND o.prior_hwid = $4 THEN 'migrated'
+                WHEN o.prior_hwid <> $2   THEN 'device_updated'
               END AS event
          FROM outcome o
      ), ev AS (
-       -- A data-modifying CTE runs to completion whether or not the
-       -- final SELECT reads it, so this records the event without a
-       -- second round trip. An unknown key produces no row in "found"
-       -- and so is never recorded: anyone can send garbage keys, and
-       -- they should not be able to grow this table by doing so.
+       -- Runs whether or not the final SELECT reads it, so the event
+       -- costs no second round trip. Unknown keys have no row in "found"
+       -- and are never recorded, so garbage keys can't grow this table.
        INSERT INTO license_events (license_key, event, ip, hwid)
        SELECT $1, c.event, $3, $2 FROM classified c WHERE c.event IS NOT NULL
        RETURNING 1
@@ -570,125 +582,83 @@ const VERIFY_SQL = `WITH found AS (
 /// covers a difference between the Postgres the tests ran on and the one
 /// in production.
 async function checkVerifyStatement() {
-  await pool.query(`EXPLAIN ${VERIFY_SQL}`, ["", "", "", ""]);
+  await pool.query(`EXPLAIN ${VERIFY_SQL}`, ["", "", "", null]);
 }
 
-// ---------- /verify - what the afkstrike desktop app actually calls ----------
+// ---------- /verify - what the afkstrike desktop app calls ----------
 //
-// Body: { key: string, hwid: string }
-// A license is bound to the first hwid that successfully verifies with
-// it ("device locked", as asked for) - every call after that must come
-// from the same hwid or it's rejected, even though the key itself is
-// still valid. This is the server-side half of per-device locking; the
-// client can't just claim a different hwid to get a second activation,
-// because THIS check is what decides, not anything the client sends
-// about its own state.
-// Longest value either field can legitimately be: a license key is at
-// most 23 characters (the older five-by-four format; current AFK- keys
-// are 18) and a hwid is a
-// 36-character UUID (see license.rs's `device_id`). Capped generously
-// rather than exactly, but capped - without this, a multi-kilobyte
-// "key" was handed straight to Postgres as a query parameter on an
-// unauthenticated-by-anything-but-a-shared-secret endpoint.
+// Body: { key, hwid, parts? }. A key is locked to the first PC that
+// activates it; later checks must come from that PC (same `hwid`, or
+// `parts` that afk_parts_match recognises) - decided here, against this
+// database, not by anything the client says about itself.
+//
+// A key is at most 23 characters and a hwid 32; capped generously, but
+// capped, since this is reachable with only the shared client secret.
 const MAX_FIELD_LEN = 128;
+const PART_NAME = /^[a-z]{1,12}$/;
+const PART_HASH = /^[0-9a-f]{8,64}$/;
 
-// The rate limiter runs BEFORE requireClientSecret on purpose: an
-// attacker without the client secret should be throttled too, and
-// putting the cheap counter first also means a flood never reaches the
-// sha256 work requireClientSecret does per request.
+/// The `parts` object as JSON text for Postgres, or null. Anything that
+/// isn't a short name mapped to a hex hash is dropped, at most 8 parts.
+function cleanParts(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(raw)) {
+    if (n >= 8) break;
+    if (!PART_NAME.test(k) || typeof v !== "string" || !PART_HASH.test(v)) continue;
+    out[k] = v;
+    n++;
+  }
+  return n ? JSON.stringify(out) : null;
+}
+
+// The rate limiter runs BEFORE requireClientSecret on purpose: callers
+// without the secret are throttled too, before any hashing work.
 app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   const key = typeof req.body.key === "string" ? req.body.key.trim() : "";
   const hwid = typeof req.body.hwid === "string" ? req.body.hwid.trim() : "";
-  // The identifier older builds sent - a random UUID persisted in a
-  // file next to the app's other state. The 57th pass replaced that
-  // with a real hardware fingerprint, which means every already-bound
-  // key would otherwise suddenly be "on another device" and every
-  // existing customer would be locked out on upgrade. The client sends
-  // its old id alongside the new one when it has one, and a match on
-  // either is accepted - with the row then rebound to the NEW id, so
-  // each install migrates itself exactly once and the legacy value
-  // stops being accepted from then on.
-  const legacyHwid = typeof req.body.legacy_hwid === "string" ? req.body.legacy_hwid.trim() : "";
   if (!key || !hwid) {
     return res.status(400).json({ success: false, message: "Missing key or hwid." });
   }
-  if (key.length > MAX_FIELD_LEN || hwid.length > MAX_FIELD_LEN || legacyHwid.length > MAX_FIELD_LEN) {
+  if (key.length > MAX_FIELD_LEN || hwid.length > MAX_FIELD_LEN) {
     return res.status(400).json({ success: false, message: "Malformed key or hwid." });
   }
+  const parts = cleanParts(req.body.parts);
 
-  // One round trip instead of the SELECT-then-UPDATE this used to do.
-  // /verify is the hottest endpoint this service has (every launch,
-  // every Start, and every 5 minutes for every running install), and
-  // the old shape paid two sequential network hops to Postgres for
-  // every single call - with a race in the gap between them, where two
-  // launches of the same key on two different devices could both read
-  // `hwid IS NULL` and both then bind, handing out two activations for
-  // a one-device key.
-  //
-  // This does the whole decision in a single statement:
-  //   - `found`  reads the license's pre-update state, so the response
-  //              can still say *why* a check failed.
-  //   - `upd`    applies the update only when the license is active AND
-  //              the device either matches or isn't bound yet. The
-  //              `COALESCE(l.hwid, $2)` is the first-device bind.
-  //
-  // Note that `upd`'s guard tests `l.status`/`l.hwid` - the live row -
-  // and NOT the values `found` read, even though `found` has them
-  // sitting right there. That is the whole race fix and it is subtle:
-  // under READ COMMITTED, when two concurrent binds collide, the
-  // second UPDATE blocks on the first's row lock and then re-evaluates
-  // its WHERE clause against the *updated* tuple. That re-check only
-  // re-reads columns of the target row; a value already materialised
-  // in a CTE is from the original snapshot and would still say
-  // "unbound", so gating on `(SELECT hwid FROM found)` would let the
-  // second device bind straight over the first. `found` is therefore
-  // used for one thing only: knowing which message to return.
-  // `updated = 0` with a row present therefore means "the key exists
-  // and is active, but this is the wrong device".
-  const { rows } = await pool.query(VERIFY_SQL, [key, hwid, clientIp(req), legacyHwid]);
+  // One statement decides everything (see VERIFY_SQL):
+  //   - `found` reads the row as it was, only to choose the message;
+  //   - `upd` binds/refreshes, guarded on the LIVE row (l.status,
+  //     l.hwid, l.hw_parts). Under READ COMMITTED a second, concurrent
+  //     bind blocks on the row lock and then re-checks that guard against
+  //     the updated row - so two PCs racing on one fresh key bind once.
+  //     Gating on `found` instead would let both through.
+  // A row with `updated = 0` is therefore an active key on another PC.
+  const { rows } = await pool.query(VERIFY_SQL, [key, hwid, clientIp(req), parts]);
 
   const license = rows[0];
   if (!license) {
     return res.json({ success: false, message: "Invalid license key." });
   }
-  if (license.status === "revoked") {
+  if (license.status === "revoked" || license.status === "banned") {
     return res.json({ success: false, message: "This license key has been revoked." });
   }
-  if (license.status === "banned") {
-    return res.json({ success: false, message: "This license key has been banned." });
-  }
-  // Checked before the device branch below, because an expired key that
-  // also happens to be on the wrong device should say it expired - that
-  // is the thing the person has to act on, and "already activated on
-  // another device" would send them to support for the wrong reason.
-  //
-  // Note the expiry is enforced by the UPDATE's own guard above, not by
-  // this branch: an expired key never reaches the bind, so it can
-  // neither claim a new device nor refresh last_seen_at. This branch
-  // only decides what to *tell* the client.
+  // Before the device check: an expired key on another PC should say it
+  // expired - that's what the person has to act on. (The UPDATE's guard
+  // already refused it; this only picks the message.)
   if (license.is_expired) {
     return res.json({ success: false, message: "This license key has expired." });
   }
   if (license.updated === 0) {
-    // Active key, but bound to a different device - the "device
-    // locked" rejection. Note this is decided here, server-side,
-    // against this server's own database: nothing the client sends
-    // about its own state can talk its way past it.
     return res.json({
       success: false,
-      message: "This license key is already activated on another device. Contact support to reset it.",
+      message: "This key is already activated on another PC. Ask on our Discord to move it to this one.",
     });
   }
-  // `expires_at` is echoed back so the desktop app can render its own
-  // "time left" readout without a second endpoint - it already calls
-  // this on launch, on Start, and every 5 minutes while running, so the
-  // value is naturally kept fresh. null means the key never expires.
   return res.json({
     success: true,
-    // Was "Device unlocked." - reworded alongside the desktop app's
-    // unlock screen, which no longer frames this as a locked device but
-    // as entering a key to use the app.
     message: "License activated.",
+    // null = never expires. The app shows the time left from this.
     expires_at: license.expires_at ? new Date(license.expires_at).toISOString() : null,
   });
 }));
@@ -831,15 +801,18 @@ app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (_req, res) =
             (count(*) FILTER (WHERE ${DERIVED_FILTERS.expiring}))::int          AS expiring_soon,
             (count(*) FILTER (WHERE ${DERIVED_FILTERS.online}))::int            AS online,
             (count(*) FILTER (WHERE ${DERIVED_FILTERS.unused}))::int            AS never_used,
-            (count(*) FILTER (WHERE created_at > now() - interval '7 days'))::int AS created_7d
-       FROM licenses`
+            (count(*) FILTER (WHERE created_at > now() - interval '7 days'))::int AS created_7d,
+            ev.activations_24h, ev.device_rejections_24h, ev.device_updates_24h
+       FROM licenses,
+            -- One round trip: the 24-hour event counts ride along.
+            (SELECT (count(*) FILTER (WHERE event = 'activated'))::int       AS activations_24h,
+                    (count(*) FILTER (WHERE event = 'rejected_device'))::int AS device_rejections_24h,
+                    (count(*) FILTER (WHERE event = 'device_updated'))::int  AS device_updates_24h
+               FROM license_events WHERE created_at > now() - interval '24 hours') ev
+      GROUP BY ev.activations_24h, ev.device_rejections_24h, ev.device_updates_24h`
   );
-  const r = rows[0];
-  const { rows: ev } = await pool.query(
-    `SELECT (count(*) FILTER (WHERE event = 'activated'))::int       AS activations_24h,
-            (count(*) FILTER (WHERE event = 'rejected_device'))::int AS device_rejections_24h
-       FROM license_events WHERE created_at > now() - interval '24 hours'`
-  );
+  const r = rows[0] || { total: 0, bound: 0, active: 0, revoked: 0, banned: 0, expired: 0, expiring_soon: 0,
+    online: 0, never_used: 0, created_7d: 0, activations_24h: 0, device_rejections_24h: 0, device_updates_24h: 0 };
   res.json({
     total: r.total,
     bound: r.bound,
@@ -850,8 +823,9 @@ app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (_req, res) =
     online: r.online,
     neverUsed: r.never_used,
     created7d: r.created_7d,
-    activations24h: ev[0].activations_24h,
-    deviceRejections24h: ev[0].device_rejections_24h,
+    activations24h: r.activations_24h,
+    deviceRejections24h: r.device_rejections_24h,
+    deviceUpdates24h: r.device_updates_24h,
   });
 }));
 
@@ -998,7 +972,7 @@ app.post("/admin/licenses/:key/reset-hwid", adminLimiter, requireAdminSecret, ah
   // FROM subquery reads the row as it was at statement start.
   const { rows } = await pool.query(
     `WITH m AS (
-       UPDATE licenses l SET hwid = NULL
+       UPDATE licenses l SET hwid = NULL, hw_parts = NULL
          FROM (SELECT id, hwid AS old_hwid FROM licenses WHERE license_key = $1) prev
         WHERE l.id = prev.id
         RETURNING l.license_key, prev.old_hwid
@@ -1078,7 +1052,7 @@ app.post("/admin/licenses/bulk", adminLimiter, requireAdminSecret, ah(async (req
   } else if (action === "reset-hwid") {
     const { rows } = await pool.query(
       `WITH m AS (
-         UPDATE licenses l SET hwid = NULL
+         UPDATE licenses l SET hwid = NULL, hw_parts = NULL
            FROM (SELECT id, hwid AS old_hwid FROM licenses
                   WHERE license_key = ANY($1::text[]) AND hwid IS NOT NULL) prev
           WHERE l.id = prev.id

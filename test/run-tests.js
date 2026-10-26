@@ -106,7 +106,7 @@ async function main() {
     check("single create returns the bare row (backward compatible)", !one.body.created);
     check("first device binds", (await verify(key, "device-A")).body.success === true);
     const b1 = (await verify(key, "device-B")).body;
-    check("second device refused", b1.success === false && /another device/.test(b1.message), b1);
+    check("second device refused", b1.success === false && /another PC/.test(b1.message), b1);
     check("first device still accepted", (await verify(key, "device-A")).body.success === true);
     check("unknown key refused", (await verify("AAAAA-BBBBB-CCCCC-DDDDD", "x")).body.success === false);
     await admin("POST", `/admin/licenses/${key}/revoke`);
@@ -148,12 +148,25 @@ async function main() {
       await sql(`DROP FUNCTION IF EXISTS afk_test_slow_bind()`);
     }
 
-    section("Legacy device-id migration");
-    const leg = (await admin("POST", "/admin/licenses", {})).body.license_key;
-    await verify(leg, "legacy-uuid");
-    check("old id migrates to the new fingerprint", (await verify(leg, "new-fp", { legacy_hwid: "legacy-uuid" })).body.success === true);
-    check("old id stops working afterwards", (await verify(leg, "someone-else", { legacy_hwid: "legacy-uuid" })).body.success === false);
-    check("migration recorded", (await events(leg)).includes("migrated"));
+    section("Same PC after a small hardware change");
+    const P = { mg: "a1a1a1a1a1a1a1a1", vol: "b2b2b2b2b2b2b2b2", cpu: "c3c3c3c3c3c3c3c3", cores: "d4d4d4d4d4d4d4d4", host: "e5e5e5e5e5e5e5e5" };
+    const hk = (await admin("POST", "/admin/licenses", {})).body.license_key;
+    check("activates with parts", (await verify(hk, "fp-1", { parts: P })).body.success === true);
+    let stored = (await sql("SELECT hw_parts FROM licenses WHERE license_key = $1", [hk]))[0].hw_parts;
+    if (typeof stored === "string") stored = JSON.parse(stored);
+    check("parts are stored", Object.keys(P).every((k) => stored[k] === P[k]) && Object.keys(stored).length === 5, stored);
+    check("renamed PC (new host, new digest) still works", (await verify(hk, "fp-2", { parts: { ...P, host: "ffffffffffffffff" } })).body.success === true);
+    check("...and the key is rebound to the new digest", (await sql("SELECT hwid FROM licenses WHERE license_key = $1", [hk]))[0].hwid === "fp-2");
+    check("...recorded as device_updated", (await events(hk)).includes("device_updated"));
+    check("CPU swap too (mg + vol + host match)", (await verify(hk, "fp-3", { parts: { ...P, host: "ffffffffffffffff", cpu: "0000000000000000", cores: "1111111111111111" } })).body.success === true);
+    check("another PC (different Windows install) is refused", (await verify(hk, "fp-x", { parts: { ...P, mg: "9999999999999999" } })).body.success === false);
+    check("only mg matching is not enough", (await verify(hk, "fp-y", { parts: { mg: P.mg, vol: "1", cpu: "2", cores: "3", host: "4" } })).body.success === false);
+    check("no parts sent = exact digest only", (await verify(hk, "fp-z")).body.success === false && (await verify(hk, "fp-3")).body.success === true);
+    check("junk parts are ignored, not stored", (await verify(hk, "fp-3", { parts: { mg: "<script>", "bad key": "aaaaaaaa", vol: 5 } })).body.success === true
+      && String(JSON.stringify((await sql("SELECT hw_parts FROM licenses WHERE license_key = $1", [hk]))[0].hw_parts)).includes(P.mg)
+      && !String(JSON.stringify((await sql("SELECT hw_parts FROM licenses WHERE license_key = $1", [hk]))[0].hw_parts)).includes("script"));
+    await admin("POST", `/admin/licenses/${hk}/reset-hwid`);
+    check("device reset clears the parts too", (await sql("SELECT hw_parts FROM licenses WHERE license_key = $1", [hk]))[0].hw_parts === null);
 
     section("Expiry");
     const exp = (await admin("POST", "/admin/licenses", { expires_at: new Date(Date.now() - 60000).toISOString() })).body.license_key;
@@ -203,7 +216,9 @@ async function main() {
     check("online / neverUsed / activations24h present", st.online >= 1 && st.neverUsed >= 1 && st.activations24h >= 1, st);
     const soon = (await admin("POST", "/admin/licenses", { expires_in_days: 3 })).body.license_key;
     check("expiring filter", (await admin("GET", "/admin/licenses?status=expiring")).body.some((r) => r.license_key === soon));
-    check("search by device", (await admin("GET", "/admin/licenses?q=new-fp")).body.length === 1);
+    const sk = (await admin("POST", "/admin/licenses", {})).body.license_key;
+    await verify(sk, "searchable-pc-77");
+    check("search by device", (await admin("GET", "/admin/licenses?q=searchable-pc-77")).body.length === 1);
     const csv = await admin("GET", "/admin/export.csv");
     check("CSV export with header", /text\/csv/.test(csv.headers.get("content-type")) && csv.body.startsWith("license_key,status"));
     await sql("UPDATE licenses SET last_seen_ip = '=HYPERLINK(1)' WHERE license_key = $1", [soon]);

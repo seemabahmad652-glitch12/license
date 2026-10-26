@@ -6,7 +6,7 @@ auto-updater downloads. A small Node/Express app on Postgres, deployed on Railwa
 
 | Route | Who calls it |
 | --- | --- |
-| `POST /verify` | The desktop app: validates a key and locks it to one PC |
+| `POST /verify` | The desktop app: `{key, hwid, parts}`, validates a key and locks it to one PC |
 | `GET /updates/latest.json` + installers | The app's auto-updater (see `updates/README.md`) |
 | `GET /` | Admin dashboard (you, in a browser) |
 | `/admin/*` | The dashboard, or you with curl (needs `ADMIN_SECRET`) |
@@ -50,14 +50,16 @@ instead of locking customers out.
 | --- | --- |
 | `license_key` | `AFK-XXXX-XXXX-XXXX` (older `XXXXX-XXXXX-XXXXX-XXXXX` keys still work) |
 | `hwid` | The PC fingerprint it's locked to; `NULL` until first activation |
+| `hw_parts` | The same PC part by part (`mg`, `vol`, `cpu`, `cores`, `host`, each an opaque hash), so a small hardware change isn't "another PC" |
 | `status` | `active`, `revoked`, or `banned` (legacy; treated like revoked) |
 | `expires_at` | `NULL` = never expires |
 | `created_at`, `last_seen_at`, `last_seen_ip` | Bookkeeping |
 
 **`license_events`**
 
-- **Recorded:** creation, first activation, legacy-id migration, every refusal (wrong
-  device, expired, revoked) with the device that tried, and every admin action.
+- **Recorded:** creation, first activation, `device_updated` (same PC after a hardware
+  change), every refusal (wrong device, expired, revoked) with the device that tried, and
+  every admin action.
 - **Not recorded:** routine successful check-ins, and unknown keys.
 - History survives a deleted key (there's no foreign key). Events are pruned after
   180 days.
@@ -68,8 +70,11 @@ instead of locking customers out.
   device, and writes the event.
 - Twenty simultaneous activations of one fresh key bind exactly once (the race test
   covers this).
-- A `legacy_hwid` from old installs is accepted once, then the key is rebound to the
-  fingerprint.
+- **Same PC after a change:** if the digest differs but `afk_parts_match` recognises
+  the PC, the check passes and the key is rebound to the new digest. That means the same
+  Windows install (`mg`) plus at least two more matching parts, so a renamed PC, a CPU
+  swap or a new disk still works. A different PC, or a fresh Windows install, needs
+  **Reset device**.
 - **Responses:** `"License activated."` with `expires_at`, or a refusal message
   (wrong device, expired, revoked, unknown).
 
@@ -161,7 +166,7 @@ curl -X POST $S/admin/licenses/bulk -H "$H" -H "$J" \
 ## Testing
 
 `test/run-tests.js` starts the real `server.js` against a real Postgres and drives it over
-HTTP. It covers device binding, the bind race, legacy migration, both key formats, expiry
+HTTP. It covers device binding, the bind race, same-PC-after-a-change matching, both key formats, expiry
 and extend, bulk actions, history, stats and daily stats, export, rate limits and gzip.
 **Run it before every push. It must end with 0 failures.**
 
