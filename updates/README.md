@@ -64,13 +64,19 @@ Git signed in to GitHub.
 Command-line form, same thing without the questions:
 
 ```powershell
-.\release.cmd -Version 0.2.0 -Notes "Auto replies and a faster sniper" -Push
+.\release.cmd -Version 0.2.0 -Notes "Auto replies; a faster sniper" 
 ```
 
-`release.cmd` runs `release.ps1` with Windows' downloaded-script check
-bypassed for that one run ("is not digitally signed" otherwise), without
-changing any system setting. Leave out `-Push` to look at the files
-before publishing.
+Other options:
+
+- `-NoPush` builds and prepares the files without publishing them.
+- `-SkipBuild` publishes the installer that's already built, for example after a push
+  that failed.
+- `-Yes` skips the "Start?" question.
+
+`release.cmd` is a single self-contained file. It checks your tools, the signing key and
+its password before the long build, and afterwards waits until the new `latest.json` is
+live. Everything it prints is also saved to `release.log`.
 
 ### By hand, if you'd rather
 
