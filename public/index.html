@@ -26,27 +26,27 @@
        translucent whites over a gradient - layering rgba(255,255,255,
        0.04) three deep made every panel edge a slightly different
        muddy grey depending on what was behind it. */
-    /* The desktop app's own flat indigo (its --accent #7c5cfc), so the
-       dashboard and the app read as one product. */
-    --bg: #0a0d16;
-    --surface: #0f1323;
-    --surface-2: #161b30;
-    --surface-3: #1d2340;
-    --line: #22273c;
-    --line-soft: #1a1f33;
+    /* The desktop app's own black-and-white palette, so the dashboard
+       and the app read as one product. */
+    --bg: #0c0c0c;
+    --surface: #161616;
+    --surface-2: #1d1d1d;
+    --surface-3: #282828;
+    --line: #2d2d2d;
+    --line-soft: #262626;
 
-    --text: #eef0fa;
-    --dim: #9ea3bd;
-    --faint: #6d7390;
+    --text: #ffffff;
+    --dim: #bdbdbd;
+    --faint: #858585;
 
-    --accent: #7c5cfc;
-    --accent-2: #6a48f0;
-    --accent-3: #a996ff;
-    --accent-soft: rgba(124, 92, 252, 0.14);
-    --accent-line: rgba(124, 92, 252, 0.32);
+    --accent: #ffffff;
+    --accent-2: #e5e5e5;
+    --accent-3: #ffffff;
+    --accent-soft: rgba(255, 255, 255, 0.08);
+    --accent-line: rgba(255, 255, 255, 0.22);
 
-    --ok: #34d399;
-    --ok-soft: rgba(52, 211, 153, 0.13);
+    --ok: #34e0c0;
+    --ok-soft: rgba(52, 224, 192, 0.13);
     --warn: #f5b544;
     --warn-soft: rgba(245, 181, 68, 0.13);
     --bad: #ff6b6b;
@@ -77,8 +77,8 @@
   html, body { margin: 0; height: 100%; }
   body {
     background:
-      radial-gradient(1100px 600px at 12% -15%, rgba(124, 92, 252, 0.13), transparent 62%),
-      radial-gradient(800px 500px at 108% 4%, rgba(106, 72, 240, 0.07), transparent 58%),
+      radial-gradient(1100px 600px at 12% -15%, rgba(255, 255, 255, 0.13), transparent 62%),
+      radial-gradient(800px 500px at 108% 4%, rgba(255, 255, 255, 0.07), transparent 58%),
       var(--bg);
     color: var(--text);
     min-height: 100%;
@@ -136,18 +136,18 @@
   /* ---------- Secret-entry gate ---------- */
   #gate {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: rgba(6, 8, 16, 0.92); backdrop-filter: blur(8px); z-index: 50; padding: 20px;
+    background: rgba(8, 8, 8, 0.92); backdrop-filter: blur(8px); z-index: 50; padding: 20px;
   }
   #gate {
     background:
-      radial-gradient(900px 500px at 50% -10%, rgba(124, 92, 252, 0.22), transparent 60%),
-      rgba(6, 8, 16, 0.96);
+      radial-gradient(900px 500px at 50% -10%, rgba(255, 255, 255, 0.22), transparent 60%),
+      rgba(8, 8, 8, 0.96);
   }
   .gate-card {
     width: min(420px, 100%); padding: 30px 30px 24px; border-radius: var(--r-lg);
-    background: linear-gradient(180deg, rgba(124, 92, 252, 0.06), transparent 40%), var(--surface);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 40%), var(--surface);
     border: 1px solid var(--line);
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(124, 92, 252, 0.08) inset;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
     margin: 0;
   }
   .gate-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
@@ -257,7 +257,7 @@
   select {
     appearance: none; -webkit-appearance: none;
     padding-right: 36px; cursor: pointer;
-    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ea3bd' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23bdbdbd' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 13px center;
   }
@@ -348,7 +348,7 @@
 
   /* ---------- Modals ---------- */
   .modal-overlay {
-    position: fixed; inset: 0; background: rgba(5, 7, 14, 0.74); backdrop-filter: blur(6px);
+    position: fixed; inset: 0; background: rgba(6, 6, 6, 0.74); backdrop-filter: blur(6px);
     display: flex; align-items: center; justify-content: center; z-index: 40; padding: 20px;
     animation: fade-in 0.15s var(--ease);
   }
@@ -432,8 +432,8 @@
   .tile .tv.warn { color: var(--warn); }
   .tile .tv.bad { color: var(--bad); }
   .tile .tv.accent { color: var(--accent-3); }
-  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); animation: pulse 2s infinite; }
-  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); } 70% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 rgba(52, 224, 192, 0.6); animation: pulse 2s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 224, 192, 0.55); } 70% { box-shadow: 0 0 0 7px rgba(52, 224, 192, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 224, 192, 0); } }
   @media (max-width: 860px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
   /* Quantity field in the create modal */
@@ -499,11 +499,11 @@
   /* ---------- Selection + bulk bar ---------- */
   .sel-col { width: 36px; padding-right: 0 !important; }
   .sel-box { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; margin: 0; vertical-align: middle; }
-  tbody tr.selected { background: rgba(124, 92, 252, 0.08); }
+  tbody tr.selected { background: rgba(255, 255, 255, 0.08); }
   .bulk-bar {
     position: sticky; top: 10px; z-index: 5; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 10px 14px; margin-bottom: 12px; border-radius: var(--r-lg);
-    background: linear-gradient(90deg, rgba(124, 92, 252, 0.22), rgba(124, 92, 252, 0.1)); border: 1px solid rgba(124, 92, 252, 0.5);
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.1)); border: 1px solid rgba(255, 255, 255, 0.5);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
   }
   .bulk-bar .bulk-count { font-size: 13px; color: var(--text); margin-right: 6px; }
@@ -518,7 +518,7 @@
     background: var(--surface-2); border: 1px solid var(--line); color: var(--dim); font-size: 12.5px;
   }
   .auto-btn .auto-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
-  .auto-btn.on { color: var(--text); border-color: rgba(52, 211, 153, 0.45); }
+  .auto-btn.on { color: var(--text); border-color: rgba(52, 224, 192, 0.45); }
   .auto-btn.on .auto-dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
   .updated-ago { font-size: 12px; color: var(--faint); white-space: nowrap; }
   .shortcuts { margin-top: 18px; text-align: center; font-size: 12px; color: var(--faint); }
@@ -528,12 +528,156 @@
   }
   @media (max-width: 640px) { .updated-ago { display: none; } }
 
+
+  /* ---------- Black and white, like the desktop app ---------- */
+  body {
+    background:
+      radial-gradient(1100px 600px at 12% -15%, rgba(255, 255, 255, 0.05), transparent 62%),
+      var(--bg);
+  }
+  #gate { background: radial-gradient(900px 500px at 50% -10%, rgba(255, 255, 255, 0.08), transparent 60%), rgba(8, 8, 8, 0.97); }
+
+  /* Cards: a dark gradient with a light top edge, like the app's panels. */
+  .gate-card, .overview, .chart-card, .table-wrap, .feed, .modal-card {
+    position: relative;
+    background: linear-gradient(180deg, #1a1a1a 0%, #131313 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .gate-card::before, .overview::before, .chart-card::before, .feed::before, .modal-card::before {
+    content: ""; position: absolute; left: 18px; right: 18px; top: 0; height: 1px; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  }
+  .gate-card { box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 60px rgba(255, 255, 255, 0.04); }
+
+  /* Headings fade white to silver. */
+  .gate-card h1, .brand-text h1 {
+    background: linear-gradient(180deg, #ffffff 30%, #bcbcbc 100%);
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  }
+
+  /* Main buttons: white with dark text and a soft glow. */
+  .btn-primary, .btn-accent {
+    background: linear-gradient(180deg, #ffffff 0%, #ececec 100%);
+    color: #0a0a0a;
+    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.08), 0 0 22px rgba(255, 255, 255, 0.14), 0 6px 18px rgba(0, 0, 0, 0.5);
+  }
+  .btn-primary:hover:not(:disabled), .btn-accent:hover:not(:disabled) {
+    filter: none; background: #ffffff;
+    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.06), 0 0 32px rgba(255, 255, 255, 0.28), 0 8px 22px rgba(0, 0, 0, 0.5);
+  }
+  .btn-accent { border-radius: 999px; }
+  .gate-submit { border-radius: 999px; }
+  .gate-spinner { border-color: rgba(0, 0, 0, 0.25); border-top-color: #0a0a0a; }
+
+  /* Other buttons: glass. */
+  .btn-ghost, .icon-btn, .auto-btn, .row-actions button, .chip, .host-pill {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015));
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+  .btn-ghost:hover:not(:disabled), .icon-btn:hover, .row-actions button:hover:not(:disabled), .chip:hover {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03));
+    border-color: rgba(255, 255, 255, 0.24);
+  }
+  .chip.on { background: #ffffff; border-color: #ffffff; color: #0a0a0a; }
+
+  input:focus, select:focus, textarea:focus { border-color: rgba(255, 255, 255, 0.35); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08); }
+  select:hover { border-color: rgba(255, 255, 255, 0.24); }
+  .key-chip:hover { border-color: rgba(255, 255, 255, 0.3); }
+  :focus-visible { outline-color: rgba(255, 255, 255, 0.6); }
+
+  .brand-mark, .gate-mark { box-shadow: 0 0 18px rgba(255, 255, 255, 0.12); }
+  .tile { background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)); }
+  .tile:hover { border-color: rgba(255, 255, 255, 0.22); }
+  .tile .tv { text-shadow: 0 0 20px rgba(255, 255, 255, 0.1); }
+  .chart-bars .b-new { box-shadow: 0 0 8px rgba(255, 255, 255, 0.35); }
+  tbody tr:hover { background: rgba(255, 255, 255, 0.035); }
+  .bulk-bar { background: linear-gradient(90deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05)); border-color: rgba(255, 255, 255, 0.24); }
+  .toast.ok { background: #0f6e5f; }
+  * { scrollbar-color: rgba(255, 255, 255, 0.18) transparent; }
+  ::selection { background: rgba(255, 255, 255, 0.85); color: #0a0a0a; }
+
+
+  /* ---------- Ambient light, particles and card lighting ----------
+     Same as the desktop app: slow drifting lights and floating sparks
+     behind everything, sparks inside the sign-in and overview cards,
+     and a soft light on the card under the pointer. */
+  .ambient { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+  #app, #toasts { position: relative; z-index: 1; }
+  #gate { z-index: 50; }
+  .ambient-light { position: absolute; border-radius: 50%; will-change: transform; }
+  .ambient-light.a1 { width: 900px; height: 900px; left: -260px; top: -480px; background: radial-gradient(closest-side, rgba(255, 255, 255, 0.075), transparent); animation: amb-drift-1 26s ease-in-out infinite alternate; }
+  .ambient-light.a2 { width: 720px; height: 720px; right: -260px; top: 160px; background: radial-gradient(closest-side, rgba(52, 224, 192, 0.06), transparent); animation: amb-drift-2 32s ease-in-out infinite alternate; }
+  .ambient-light.a3 { width: 820px; height: 820px; left: 22%; bottom: -560px; background: radial-gradient(closest-side, rgba(255, 255, 255, 0.05), transparent); animation: amb-drift-3 38s ease-in-out infinite alternate; }
+  @keyframes amb-drift-1 { to { transform: translate(140px, 90px) scale(1.15); } }
+  @keyframes amb-drift-2 { to { transform: translate(-160px, -70px) scale(1.2); } }
+  @keyframes amb-drift-3 { to { transform: translate(-120px, -110px) scale(1.1); } }
+  .ambient-particle {
+    position: absolute; border-radius: 50%; background: #ffffff; opacity: 0;
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(255, 255, 255, 0.35);
+    will-change: transform, opacity;
+    animation-name: amb-rise, amb-twinkle; animation-timing-function: linear, ease-in-out; animation-iteration-count: infinite, infinite;
+  }
+  .ambient-particle.is-teal { background: #34e0c0; box-shadow: 0 0 6px rgba(52, 224, 192, 0.9), 0 0 14px rgba(52, 224, 192, 0.35); }
+  @keyframes amb-rise { from { transform: translateY(30px); } to { transform: translateY(-90px); } }
+  @keyframes amb-twinkle { 0%, 100% { opacity: 0; } 50% { opacity: 0.95; } }
+
+  /* Cards let a little of the light through. */
+  .overview, .chart-card, .table-wrap, .feed {
+    background: linear-gradient(180deg, rgba(26, 26, 26, 0.82) 0%, rgba(19, 19, 19, 0.86) 100%);
+  }
+  .overview, .gate-card { overflow: hidden; isolation: isolate; }
+  .overview {
+    background:
+      radial-gradient(460px circle at 94% -14%, rgba(255, 255, 255, 0.1), transparent 62%),
+      linear-gradient(180deg, rgba(26, 26, 26, 0.82) 0%, rgba(19, 19, 19, 0.86) 100%);
+  }
+  .gate-card { background: radial-gradient(420px circle at 90% -20%, rgba(255, 255, 255, 0.1), transparent 62%), linear-gradient(180deg, #1a1a1a 0%, #131313 100%); }
+  .overview > :not(.card-spark), .gate-card > :not(.card-spark) { position: relative; z-index: 1; }
+  .card-spark {
+    position: absolute; z-index: 0; width: 4px; height: 4px; border-radius: 50%; background: #ffffff; opacity: 0; pointer-events: none;
+    box-shadow: 0 0 10px #ffffff, 0 0 20px rgba(255, 255, 255, 0.5);
+    animation: card-twinkle 3.4s ease-in-out infinite;
+  }
+  .card-spark:nth-child(3n) { width: 3px; height: 3px; }
+  .card-spark:nth-child(4n) { background: #34e0c0; box-shadow: 0 0 10px #34e0c0, 0 0 20px rgba(52, 224, 192, 0.5); }
+  @keyframes card-twinkle { 0%, 100% { opacity: 0; transform: scale(0.4); } 45% { opacity: 1; transform: scale(1.3); } }
+
+  /* Pointer light on the card under the mouse (--mx / --my set below). */
+  .lit { position: relative; }
+  .lit::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 0;
+    opacity: 0; transition: opacity 0.25s var(--ease);
+    background: radial-gradient(380px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.08), transparent 45%);
+  }
+  .lit:hover::after { opacity: 1; }
+  .tile.lit::after { background: radial-gradient(200px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.1), transparent 55%); }
+
+  /* Main buttons breathe a little. */
+  .btn-accent:not(:disabled), .gate-submit:not(:disabled) { animation: btn-glow 3.2s ease-in-out infinite; }
+  /* With motion turned off in the OS, the sparks stay as faint still dots. */
+  @media (prefers-reduced-motion: reduce) {
+    .ambient-light, .ambient-particle, .card-spark, .btn-accent, .gate-submit { animation: none; }
+    .ambient-particle, .card-spark { opacity: 0.35; }
+  }
+  @keyframes btn-glow {
+    0%, 100% { box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.08), 0 0 18px rgba(255, 255, 255, 0.12), 0 6px 18px rgba(0, 0, 0, 0.5); }
+    50% { box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.08), 0 0 34px rgba(255, 255, 255, 0.3), 0 6px 18px rgba(0, 0, 0, 0.5); }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
   }
 </style>
 </head>
 <body>
+  <!-- Drifting lights and floating sparks behind the page, like the
+       desktop app. Decorative only. -->
+  <div class="ambient" aria-hidden="true">
+    <div class="ambient-light a1"></div>
+    <div class="ambient-light a2"></div>
+    <div class="ambient-light a3"></div>
+    <div id="ambientParticles"></div>
+  </div>
 
   <div id="gate">
     <form class="gate-card" id="gateForm" novalidate>
@@ -1717,6 +1861,52 @@ document.addEventListener("keydown", (e) => {
   } else {
     showGate();
   }
+})();
+
+// ---------- Ambient light, particles and card lighting ----------
+// Same effect as the desktop app. Only transform and opacity animate.
+(function ambient() {
+  const box = document.getElementById("ambientParticles");
+  if (box) {
+    for (let i = 0; i < 44; i++) {
+      const p = document.createElement("span");
+      p.className = "ambient-particle" + (i % 6 === 0 ? " is-teal" : "");
+      const size = (1.8 + Math.random() * 2.8).toFixed(1);
+      const rise = (10 + Math.random() * 14).toFixed(1);
+      const blink = (2.4 + Math.random() * 3.2).toFixed(1);
+      p.style.cssText =
+        `left:${(Math.random() * 100).toFixed(1)}%;top:${(Math.random() * 100).toFixed(1)}%;` +
+        `width:${size}px;height:${size}px;animation-duration:${rise}s,${blink}s;` +
+        `animation-delay:-${(Math.random() * rise).toFixed(1)}s,-${(Math.random() * blink).toFixed(1)}s`;
+      box.appendChild(p);
+    }
+  }
+  // Sparks inside the sign-in card and the overview card.
+  const spots = [[12, 18], [48, 8], [90, 16], [66, 82], [28, 88], [94, 60], [6, 62]];
+  for (const card of document.querySelectorAll(".gate-card, .overview")) {
+    spots.forEach(([x, y], i) => {
+      const sp = document.createElement("span");
+      sp.className = "card-spark";
+      sp.setAttribute("aria-hidden", "true");
+      sp.style.cssText = `left:${x}%;top:${y}%;animation-delay:${(i * 0.55).toFixed(2)}s`;
+      card.appendChild(sp);
+    });
+  }
+  // A soft light on the card under the pointer.
+  const LIT = ".overview, .chart-card, .table-wrap, .feed, .tile, .gate-card";
+  document.querySelectorAll(LIT).forEach((c) => c.classList.add("lit"));
+  let pending = null;
+  document.addEventListener("pointermove", (ev) => {
+    if (pending) return;
+    pending = requestAnimationFrame(() => {
+      pending = null;
+      const card = ev.target instanceof Element ? ev.target.closest(LIT) : null;
+      if (!card) return;
+      const r = card.getBoundingClientRect();
+      card.style.setProperty("--mx", `${Math.round(ev.clientX - r.left)}px`);
+      card.style.setProperty("--my", `${Math.round(ev.clientY - r.top)}px`);
+    });
+  }, { passive: true });
 })();
 </script>
 </body>
