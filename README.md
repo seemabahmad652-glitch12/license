@@ -2,7 +2,7 @@
 
 The self-hosted license check behind AfkStrike's key screen, plus the files the app's
 auto-updater downloads. A small Node/Express app on Postgres, deployed on Railway at
-**https://license-server-production-b453.up.railway.app**. It isn't part of the desktop app's build.
+**https://afkstrikelicense.up.railway.app**. It isn't part of the desktop app's build.
 
 | Route | Who calls it |
 | --- | --- |
@@ -19,7 +19,7 @@ auto-updater downloads. A small Node/Express app on Postgres, deployed on Railwa
 | GitHub | `seemabahmad652-glitch12/license`, branch `main`, files at the repo root (**public repo**) |
 | Railway | project `afkstrike-license` → service `license-server` → env `production` |
 | Database | Railway Postgres, attached as `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` |
-| Domain | `license-server-production-b453.up.railway.app` (Railway's own domain and TLS) |
+| Domain | `afkstrikelicense.up.railway.app` (Railway's own domain and TLS) |
 | Variables | `DATABASE_URL`, `CLIENT_SHARED_SECRET`, `ADMIN_SECRET` (`PORT` is injected) |
 
 **To update the server, push to `main`.** Railway builds `npm start` (`node server.js`),
@@ -80,7 +80,7 @@ instead of locking customers out.
 
 ## Admin dashboard
 
-Open https://license-server-production-b453.up.railway.app/ and enter `ADMIN_SECRET` once per tab. The lock icon
+Open https://afkstrikelicense.up.railway.app/ and enter `ADMIN_SECRET` once per tab. The lock icon
 clears it.
 
 - **Overview:**
@@ -108,7 +108,7 @@ clears it.
 Every call needs the header `X-Admin-Secret: $ADMIN_SECRET`. Replace `$K` with a key.
 
 ```bash
-S=https://license-server-production-b453.up.railway.app
+S=https://afkstrikelicense.up.railway.app
 H="X-Admin-Secret: $ADMIN_SECRET"
 J="Content-Type: application/json"
 

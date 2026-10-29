@@ -5,7 +5,7 @@
   "platforms": {
     "windows-x86_64": {
       "signature": "CHANGE_ME_PASTE_THE_.SIG_FILE_CONTENTS_HERE",
-      "url": "https://license-server-production-b453.up.railway.app/updates/AfkStrike_0.1.0_x64-setup.exe"
+      "url": "https://afkstrikelicense.up.railway.app/updates/AfkStrike_0.1.0_x64-setup.exe"
     }
   }
 }
