@@ -138,11 +138,47 @@
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: rgba(6, 8, 16, 0.92); backdrop-filter: blur(8px); z-index: 50; padding: 20px;
   }
-  .gate-card {
-    width: min(400px, 100%); padding: 30px; border-radius: var(--r-lg);
-    background: var(--surface); border: 1px solid var(--line);
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  #gate {
+    background:
+      radial-gradient(900px 500px at 50% -10%, rgba(124, 92, 252, 0.22), transparent 60%),
+      rgba(6, 8, 16, 0.96);
   }
+  .gate-card {
+    width: min(420px, 100%); padding: 30px 30px 24px; border-radius: var(--r-lg);
+    background: linear-gradient(180deg, rgba(124, 92, 252, 0.06), transparent 40%), var(--surface);
+    border: 1px solid var(--line);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(124, 92, 252, 0.08) inset;
+    margin: 0;
+  }
+  .gate-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+  .gate-head .gate-mark { margin-bottom: 0; flex: none; }
+  .gate-host { color: var(--dim); font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+  .gate-lead { color: var(--dim); font-size: 13px; line-height: 1.5; margin: 0 0 18px; }
+  .gate-lead code { color: var(--text); background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
+  .gate-label { display: block; font-size: 12px; font-weight: 600; color: var(--dim); margin-bottom: 6px; }
+  .gate-field { position: relative; margin-bottom: 12px; }
+  .gate-field input { width: 100%; padding-right: 44px; margin: 0; font-family: ui-monospace, Consolas, monospace; }
+  .gate-eye {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px;
+    background: transparent; border: 0; color: var(--dim); cursor: pointer;
+  }
+  .gate-eye:hover, .gate-eye[aria-pressed="true"] { color: var(--text); background: var(--accent-soft); }
+  .gate-remember { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); cursor: pointer; margin-bottom: 10px; user-select: none; }
+  .gate-remember input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+  .gate-submit { width: 100%; justify-content: center; display: inline-flex; align-items: center; gap: 8px; min-height: 40px; }
+  .gate-spinner {
+    display: none; width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.35); border-top-color: #fff; animation: gate-spin 0.7s linear infinite;
+  }
+  .gate-card.is-busy .gate-spinner { display: inline-block; }
+  .gate-card.is-busy .gate-submit { opacity: 0.85; cursor: progress; }
+  @keyframes gate-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .gate-spinner { animation-duration: 2s; } }
+  .gate-foot { color: var(--dim); font-size: 11.5px; margin: 14px 0 0; text-align: center; opacity: 0.8; }
+  .gate-card.shake { animation: gate-shake 0.32s ease; }
+  @keyframes gate-shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+  .visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; padding: 0; }
   /* Both marks hold the real app icon (public/logo.png - the same
      artwork the Windows build ships as its .ico) rather than a letter
      on a gradient. The gradient fill is dropped because the logo
@@ -156,8 +192,7 @@
   }
   .gate-card h1 { font-size: 19px; margin: 0 0 6px; letter-spacing: -0.01em; }
   .gate-card p { color: var(--dim); font-size: 13px; margin: 0 0 20px; max-width: 46ch; }
-  .gate-card input { width: 100%; margin-bottom: 12px; }
-  .gate-error { color: var(--bad); font-size: 13px; min-height: 18px; margin-bottom: 6px; }
+  .gate-error { color: var(--bad); font-size: 13px; min-height: 18px; margin-bottom: 8px; line-height: 1.4; }
 
   /* ---------- Shell ---------- */
   #app { max-width: 1200px; margin: 0 auto; padding: 30px 24px 70px; }
@@ -501,15 +536,36 @@
 <body>
 
   <div id="gate">
-    <div class="gate-card">
-      <div class="gate-mark"><img src="logo.png" alt="" /></div>
-      <h1>License admin</h1>
-      <p>Enter the server's admin secret to manage keys. It stays in this
-      browser tab only and is sent as a header to this server, nowhere else.</p>
-      <div class="gate-error" id="gateError"></div>
-      <input type="password" id="gateSecretInput" placeholder="Admin secret" autocomplete="off" />
-      <button class="btn-primary" id="gateSubmit">Unlock</button>
-    </div>
+    <form class="gate-card" id="gateForm" novalidate>
+      <div class="gate-head">
+        <div class="gate-mark"><img src="logo.png" alt="" /></div>
+        <div>
+          <h1>AfkStrike license admin</h1>
+          <span class="gate-host" id="gateHost"></span>
+        </div>
+      </div>
+      <p class="gate-lead">Sign in with the server's admin secret (Railway &rsaquo; license-server &rsaquo; Variables &rsaquo; <code>ADMIN_SECRET</code>).</p>
+      <!-- A username field (hidden) lets the browser's password manager
+           save and fill the secret like any other login. -->
+      <input type="text" name="username" value="admin" autocomplete="username" class="visually-hidden" tabindex="-1" aria-hidden="true" />
+      <label class="gate-label" for="gateSecretInput">Admin secret</label>
+      <div class="gate-field">
+        <input type="password" id="gateSecretInput" name="password" autocomplete="current-password" spellcheck="false" placeholder="Paste the secret" />
+        <button type="button" class="gate-eye" id="gateEye" title="Show the secret" aria-label="Show the secret" aria-pressed="false">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <label class="gate-remember">
+        <input type="checkbox" id="gateRemember" />
+        <span>Keep me signed in on this browser</span>
+      </label>
+      <div class="gate-error" id="gateError" role="alert"></div>
+      <button type="submit" class="btn-primary gate-submit" id="gateSubmit">
+        <span class="gate-spinner" aria-hidden="true"></span>
+        <span id="gateSubmitLabel">Sign in</span>
+      </button>
+      <p class="gate-foot">The secret is only ever sent to this server, as a request header.</p>
+    </form>
   </div>
 
   <div id="app" class="hidden">
@@ -714,14 +770,20 @@
 // server it manages.
 const SECRET_KEY = "afkstrike_admin_secret";
 
+// This tab only (sessionStorage) by default; "Keep me signed in" puts it
+// in localStorage for this browser instead. The lock button clears both.
 function getSecret() {
-  try { return sessionStorage.getItem(SECRET_KEY) || ""; } catch { return ""; }
+  try { return sessionStorage.getItem(SECRET_KEY) || localStorage.getItem(SECRET_KEY) || ""; } catch { return ""; }
 }
-function setSecret(value) {
-  try { sessionStorage.setItem(SECRET_KEY, value); } catch { /* private window etc. */ }
+function setSecret(value, remember = false) {
+  try {
+    sessionStorage.setItem(SECRET_KEY, value);
+    if (remember) localStorage.setItem(SECRET_KEY, value);
+  } catch { /* private window etc. */ }
 }
 function clearSecret() {
   try { sessionStorage.removeItem(SECRET_KEY); } catch { /* ignore */ }
+  try { localStorage.removeItem(SECRET_KEY); } catch { /* ignore */ }
 }
 
 async function api(path, options = {}) {
@@ -734,7 +796,7 @@ async function api(path, options = {}) {
     },
   });
   if (res.status === 401) {
-    showGate("That secret was rejected by the server.");
+    showGate("That secret isn't right. Copy ADMIN_SECRET again from Railway's Variables tab.");
     throw new Error("unauthorized");
   }
   if (!res.ok) {
@@ -766,22 +828,66 @@ const appEl = document.getElementById("app");
 const gateSecretInput = document.getElementById("gateSecretInput");
 const gateError = document.getElementById("gateError");
 
+const gateForm = document.getElementById("gateForm");
+document.getElementById("gateHost").textContent = location.host;
+
+function setGateBusy(busy, label) {
+  gateForm.classList.toggle("is-busy", busy);
+  document.getElementById("gateSubmit").disabled = busy;
+  gateSecretInput.disabled = busy;
+  document.getElementById("gateSubmitLabel").textContent = busy ? (label || "Checking\u2026") : "Sign in";
+}
+
+function shakeGate() {
+  gateForm.classList.remove("shake");
+  void gateForm.offsetWidth; // restart the animation
+  gateForm.classList.add("shake");
+}
+
 function showGate(error) {
   clearSecret();
+  setGateBusy(false);
   gateEl.classList.remove("hidden");
   appEl.classList.add("hidden");
   gateError.textContent = error || "";
   gateSecretInput.value = "";
+  if (error) shakeGate();
   gateSecretInput.focus();
 }
 
-async function tryUnlock(secret) {
-  setSecret(secret);
+// Plain-English reason for a sign-in that didn't get an answer. A 401 is
+// handled by api() itself (showGate with "rejected").
+function gateProblem(e) {
+  const msg = String((e && e.message) || e || "");
+  if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+    return "Couldn't reach the server. Check your internet, then try again.";
+  }
+  if (/too many/i.test(msg)) return msg;
+  return `The server had a problem (${msg}). Try again in a moment.`;
+}
+
+async function tryUnlock(secret, remember = false) {
+  setGateBusy(true);
+  // Railway's free plan puts the server to sleep; waking it can take a
+  // while, so say so instead of looking frozen.
+  const slow = setTimeout(() => setGateBusy(true, "Waking the server up\u2026"), 3000);
+  setSecret(secret, remember);
   try {
     await refreshStats();
-  } catch {
-    return; // api() already called showGate() on a 401
+  } catch (e) {
+    clearTimeout(slow);
+    if (e && e.message === "unauthorized") return; // api() already showed the gate
+    clearSecret();
+    setGateBusy(false);
+    gateEl.classList.remove("hidden");
+    appEl.classList.add("hidden");
+    gateError.textContent = gateProblem(e);
+    gateSecretInput.value = secret;
+    gateSecretInput.focus();
+    return;
   }
+  clearTimeout(slow);
+  setGateBusy(false);
   gateEl.classList.add("hidden");
   appEl.classList.remove("hidden");
   document.getElementById("hostPill").textContent = location.host;
@@ -792,14 +898,21 @@ async function tryUnlock(secret) {
   setAuto(auto);
 }
 
-document.getElementById("gateSubmit").addEventListener("click", () => {
+gateForm.addEventListener("submit", (e) => {
+  e.preventDefault();
   const value = gateSecretInput.value.trim();
-  if (!value) { gateError.textContent = "Enter the admin secret first."; return; }
+  if (!value) { gateError.textContent = "Paste the admin secret first."; shakeGate(); gateSecretInput.focus(); return; }
   gateError.textContent = "";
-  tryUnlock(value);
+  tryUnlock(value, document.getElementById("gateRemember").checked);
 });
-gateSecretInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") document.getElementById("gateSubmit").click();
+document.getElementById("gateEye").addEventListener("click", () => {
+  const eye = document.getElementById("gateEye");
+  const show = gateSecretInput.type === "password";
+  gateSecretInput.type = show ? "text" : "password";
+  eye.setAttribute("aria-pressed", String(show));
+  eye.title = show ? "Hide the secret" : "Show the secret";
+  eye.setAttribute("aria-label", eye.title);
+  gateSecretInput.focus();
 });
 document.getElementById("lockBtn").addEventListener("click", () => showGate());
 
@@ -1596,7 +1709,11 @@ document.addEventListener("keydown", (e) => {
 (function boot() {
   const saved = getSecret();
   if (saved) {
-    tryUnlock(saved);
+    // Signing straight back in: the form stays up, busy, so a slow
+    // (sleeping) server shows "Waking the server up" rather than a blank page.
+    gateEl.classList.remove("hidden");
+    try { document.getElementById("gateRemember").checked = !!localStorage.getItem(SECRET_KEY); } catch { /* ignore */ }
+    tryUnlock(saved, document.getElementById("gateRemember").checked);
   } else {
     showGate();
   }
