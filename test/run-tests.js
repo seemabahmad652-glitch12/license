@@ -34,6 +34,19 @@ if (!/test/i.test(dbName) || DB === process.env.DATABASE_URL) {
 const PORT = 39000 + Math.floor(Math.random() * 1000);
 const BASE = `http://127.0.0.1:${PORT}`;
 const CLIENT = "test-client-secret";
+// A throwaway signing key for this run; the public half checks the tokens.
+const crypto = require("crypto");
+const SIGN_SEED = crypto.randomBytes(32);
+const SIGN_PUB = crypto.createPublicKey(crypto.createPrivateKey({
+  key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), SIGN_SEED]), format: "der", type: "pkcs8",
+}));
+function readToken(token) {
+  const [payload, sig] = String(token || "").split(".");
+  if (!payload || !sig) return null;
+  const fromB64 = (s) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+  if (!crypto.verify(null, Buffer.from(payload), SIGN_PUB, fromB64(sig))) return null;
+  return JSON.parse(fromB64(payload).toString("utf8"));
+}
 const ADMIN = "test-admin-secret";
 const pool = new Pool({ connectionString: DB, max: 2 });
 const sql = async (q, p) => (await pool.query(q, p)).rows;
@@ -70,7 +83,7 @@ const section = (t) => console.log(`\n${t}`);
 
 async function startServer() {
   const child = spawn(process.execPath, [path.join(__dirname, "..", "server.js")], {
-    env: { ...process.env, DATABASE_URL: DB, CLIENT_SHARED_SECRET: CLIENT, ADMIN_SECRET: ADMIN, PORT: String(PORT) },
+    env: { ...process.env, DATABASE_URL: DB, CLIENT_SHARED_SECRET: CLIENT, ADMIN_SECRET: ADMIN, LICENSE_SIGNING_KEY: SIGN_SEED.toString("base64"), PORT: String(PORT) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let log = "";
@@ -98,6 +111,25 @@ async function main() {
     check("admin with a wrong secret -> 401", (await fetch(BASE + "/admin/stats", { headers: { "x-admin-secret": "nope", "x-forwarded-for": freshIp() } })).status === 401);
     const big = await fetch(BASE + "/verify", { method: "POST", headers: { "content-type": "application/json", "x-client-secret": CLIENT, "x-forwarded-for": freshIp() }, body: JSON.stringify({ key: "x".repeat(5000), hwid: "y" }) });
     check("oversized body rejected", big.status === 413 || big.status === 400, big.status);
+
+    section("Signed tokens");
+    {
+      const tk = (await admin("POST", "/admin/licenses", { expires_in_days: 5 })).body.license_key;
+      const nonce = crypto.randomBytes(16).toString("hex");
+      const r = await verify(tk, "a".repeat(32), { nonce });
+      const t = r.body && readToken(r.body.token);
+      check("a yes carries a token signed by the server's key", !!t, r.body);
+      check("the token names this device and this request's nonce", t && t.hwid === "a".repeat(32) && t.nonce === nonce, t);
+      check("the token carries the key's hash, not the key", t && t.kh === crypto.createHash("sha256").update(tk).digest("hex") && !JSON.stringify(t).includes(tk), t);
+      check("the token carries the expiry and a current issue time", t && t.exp && Math.abs(t.iat - Date.now() / 1000) < 60, t);
+      const forged = r.body.token.slice(0, -4) + (r.body.token.endsWith("AAAA") ? "BBBB" : "AAAA");
+      check("a tampered token fails verification", readToken(forged) === null);
+      const bad = await verify(tk, "a".repeat(32), { nonce: "not-a-nonce" });
+      check("a malformed nonce is left out, not echoed", readToken(bad.body.token).nonce === null);
+      const no = await verify(tk, "b".repeat(32));
+      check("a refusal carries no token", no.body.success === false && !no.body.token, no.body);
+      await admin("DELETE", `/admin/licenses/${tk}`);
+    }
 
     section("Device binding");
     const one = await admin("POST", "/admin/licenses", {});

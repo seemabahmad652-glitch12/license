@@ -20,7 +20,7 @@ auto-updater downloads. A small Node/Express app on Postgres, deployed on Railwa
 | Railway | project `afkstrike-license` → service `license-server` → env `production` |
 | Database | Railway Postgres, attached as `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` |
 | Domain | `afkstrikelicense.up.railway.app` (Railway's own domain and TLS) |
-| Variables | `DATABASE_URL`, `CLIENT_SHARED_SECRET`, `ADMIN_SECRET` (`PORT` is injected) |
+| Variables | `DATABASE_URL`, `CLIENT_SHARED_SECRET`, `ADMIN_SECRET`, `LICENSE_SIGNING_KEY` (`PORT` is injected) |
 
 **To update the server, push to `main`.** Railway builds `npm start` (`node server.js`),
 waits for `/health` to pass and only then swaps it in. A build that can't start never
@@ -38,6 +38,13 @@ instead of locking customers out.
     and must be identical on both sides, or every app gets "Unauthorized client".
   - It ships inside the app, so it's only a filter against random traffic, not a real
     boundary.
+- **`LICENSE_SIGNING_KEY`**
+  - Base64 of a 32-byte Ed25519 seed. Every "yes" from `/verify` includes a `token`
+    signed with it: the key's hash, the device, the expiry, the issue time and the
+    app's one-time nonce. The app checks it with the public key compiled into
+    `license.rs`, so a fake server, a replayed answer or an edited offline stamp is
+    refused. The server won't start without it, and logs its public key at boot.
+  - Changing it means releasing the app with the new public key.
 - **`ADMIN_SECRET`**
   - The real boundary. Never put it in the app, this repo or a chat.
   - The dashboard keeps it only in that browser tab's `sessionStorage`.
@@ -75,7 +82,7 @@ instead of locking customers out.
   Windows install (`mg`) plus at least two more matching parts, so a renamed PC, a CPU
   swap or a new disk still works. A different PC, or a fresh Windows install, needs
   **Reset device**.
-- **Responses:** `"License activated."` with `expires_at`, or a refusal message
+- **Responses:** `"License activated."` with `expires_at` and the signed `token`, or a refusal message (no token)
   (wrong device, expired, revoked, unknown).
 
 ## Admin dashboard

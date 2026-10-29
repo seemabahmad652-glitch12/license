@@ -31,6 +31,10 @@ const PORT = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
 const CLIENT_SHARED_SECRET = process.env.CLIENT_SHARED_SECRET;
 const ADMIN_SECRET = process.env.ADMIN_SECRET;
+// Base64 of a 32-byte Ed25519 seed. Signs every "yes" from /verify, so the
+// desktop app (which holds only the public half) can tell a real answer
+// from a fake license server, a replayed answer, or a hand-edited file.
+const LICENSE_SIGNING_KEY = process.env.LICENSE_SIGNING_KEY;
 
 // Fail loudly at boot rather than quietly running with an unprotected
 // admin API or an unprotected /verify endpoint - a missing env var here
@@ -40,11 +44,56 @@ for (const [name, value] of [
   ["DATABASE_URL", DATABASE_URL],
   ["CLIENT_SHARED_SECRET", CLIENT_SHARED_SECRET],
   ["ADMIN_SECRET", ADMIN_SECRET],
+  ["LICENSE_SIGNING_KEY", LICENSE_SIGNING_KEY],
 ]) {
   if (!value) {
     console.error(`Missing required environment variable: ${name}. See README.md - set this in Railway's Variables tab.`);
     process.exit(1);
   }
+}
+
+// ---------- Signed licence tokens ----------
+//
+// token = base64url(payload JSON) + "." + base64url(Ed25519 signature over
+// that first part, exactly as sent). The payload binds the answer to:
+//   kh    - SHA-256 of the key (the key itself is never echoed back),
+//   hwid  - the device digest the key is now locked to,
+//   exp   - the key's expiry (ISO) or null,
+//   iat   - when the server said yes (Unix seconds) - the offline grace
+//           counts from this signed time, not from a file the user can edit,
+//   nonce - the random value the app sent with this request, so a recorded
+//           "yes" can't be replayed to it later.
+function loadSigningKey(b64) {
+  const seed = Buffer.from(String(b64).trim(), "base64");
+  if (seed.length !== 32) {
+    console.error("LICENSE_SIGNING_KEY must be the base64 of a 32-byte Ed25519 seed.");
+    process.exit(1);
+  }
+  // PKCS#8 wrapper for a raw Ed25519 seed (RFC 8410).
+  const der = Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]);
+  return crypto.createPrivateKey({ key: der, format: "der", type: "pkcs8" });
+}
+const signingKey = loadSigningKey(LICENSE_SIGNING_KEY);
+// Logged at boot so it can be compared with the copy compiled into the app.
+const signingPublicHex = crypto
+  .createPublicKey(signingKey)
+  .export({ format: "der", type: "spki" })
+  .subarray(-32)
+  .toString("hex");
+
+const b64url = (buf) => Buffer.from(buf).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+
+function signLicenseToken({ key, hwid, expiresAt, nonce }) {
+  const payload = b64url(JSON.stringify({
+    v: 1,
+    kh: crypto.createHash("sha256").update(key).digest("hex"),
+    hwid,
+    exp: expiresAt ? new Date(expiresAt).toISOString() : null,
+    iat: Math.floor(Date.now() / 1000),
+    nonce: nonce || null,
+  }));
+  const sig = crypto.sign(null, Buffer.from(payload), signingKey);
+  return `${payload}.${b64url(sig)}`;
 }
 
 const pool = new Pool({
@@ -628,6 +677,7 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
     return res.json({ success: false, message: "Invalid license key." });
   }
   const parts = cleanParts(req.body.parts);
+  const nonce = typeof req.body.nonce === "string" && /^[0-9a-f]{32}$/.test(req.body.nonce) ? req.body.nonce : null;
 
   // One statement decides everything (see VERIFY_SQL):
   //   - `found` reads the row as it was, only to choose the message;
@@ -663,6 +713,8 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
     message: "License activated.",
     // null = never expires. The app shows the time left from this.
     expires_at: license.expires_at ? new Date(license.expires_at).toISOString() : null,
+    // What the app actually trusts - see signLicenseToken.
+    token: signLicenseToken({ key, hwid, expiresAt: license.expires_at, nonce }),
   });
 }));
 
@@ -1118,6 +1170,7 @@ migrate()
 
     const server = app.listen(PORT, () => {
       console.log(`afkstrike license server listening on :${PORT}`);
+      console.log(`licence signing public key: ${signingPublicHex}`);
     });
 
     // Railway sends SIGTERM and then kills the container shortly
