@@ -239,27 +239,27 @@ function generateLicenseKey() {
   return groups.join("-");
 }
 
-/// Railway (like most PaaS) terminates TLS in front of the app and
-/// forwards the client IP via X-Forwarded-For, so `req.ip` on its own
-/// is just Railway's internal proxy address.
+/// Railway terminates TLS in front of the app, so `req.ip` on its own is
+/// just Railway's internal proxy address. Railway's edge puts the
+/// caller's real address in `X-Real-IP` (see Railway's networking
+/// "Specs & Limits" page).
 ///
-/// This used to take the LEFT-most entry, which is a real
-/// vulnerability, not a style choice: X-Forwarded-For is a list that
-/// each hop *appends* to, so the left-most entry is whatever the
-/// caller sent - a header they control completely. Anyone could put
-/// `1.2.3.4` (or any string at all) there and that is what landed in
-/// `last_seen_ip`, and it would equally have defeated anything keyed
-/// off this value, rate limiting included. The RIGHT-most entry is the
-/// one Railway's own proxy appended, which is the only hop in that
-/// list this process has any reason to believe.
+/// `X-Forwarded-For` is NOT trustworthy here: tested live, Railway passes
+/// a caller-supplied value straight through, so anyone could rotate it to
+/// dodge the rate limits (including the admin-secret one) and fake
+/// `last_seen_ip`. It's only a fallback for when `X-Real-IP` is absent
+/// (local runs and the test suite).
 ///
 /// Also normalised and length-capped: this value is persisted and
 /// later rendered in the admin dashboard, so it should only ever be
 /// IP-shaped characters, never arbitrary header bytes.
 function clientIp(req) {
+  const real = req.headers["x-real-ip"];
   const xff = req.headers["x-forwarded-for"];
   let ip = req.ip;
-  if (typeof xff === "string" && xff.length > 0) {
+  if (typeof real === "string" && real.trim().length > 0) {
+    ip = real.trim();
+  } else if (typeof xff === "string" && xff.length > 0) {
     const hops = xff.split(",");
     ip = hops[hops.length - 1].trim();
   }

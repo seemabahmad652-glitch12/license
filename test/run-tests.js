@@ -225,6 +225,17 @@ async function main() {
     let spoofed = 0;
     for (let i = 0; i < 32; i++) if ((await verify("AAAAA-BBBBB-CCCCC-DDDDD", "x", {}, `${i}.${i}.${i}.${i}, 198.51.100.7`)).status === 429) spoofed++;
     check("a spoofed left-most X-Forwarded-For doesn't evade it", spoofed === 2, spoofed);
+    // On Railway the edge sets X-Real-IP; X-Forwarded-For is whatever the caller sent.
+    let rotated = 0;
+    for (let i = 0; i < 32; i++) {
+      const r = await fetch(BASE + "/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-client-secret": CLIENT, "x-real-ip": "198.51.100.42", "x-forwarded-for": `192.0.2.${i + 1}` },
+        body: JSON.stringify({ key: "AAAAA-BBBBB-CCCCC-DDDDD", hwid: "x" }),
+      });
+      if (r.status === 429) rotated++;
+    }
+    check("X-Real-IP wins: rotating X-Forwarded-For doesn't evade it", rotated === 2, rotated);
 
     section("Bulk actions");
     const made = (await admin("POST", "/admin/licenses", { count: 4, expires_in_days: 10 })).body.created.map((l) => l.license_key);

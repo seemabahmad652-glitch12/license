@@ -151,10 +151,10 @@ curl -X POST $S/admin/licenses/bulk -H "$H" -H "$J" \
 
 ## Hardening
 
-- The client IP is the right-most `X-Forwarded-For` hop (the one Railway appended),
-  normalised and length-capped. This is only right while nothing sits in front of
-  Railway: put Cloudflare or another proxy in front and every customer behind it would
-  share one rate-limit bucket.
+- The client IP is Railway's `X-Real-IP` header, normalised and length-capped.
+  `X-Forwarded-For` is only a fallback for local runs: on Railway a caller can set it to
+  anything. This is only right while nothing sits in front of Railway: put Cloudflare or
+  another proxy in front and every customer behind it would share one rate-limit bucket.
 - **Rate limits:** `/verify` 30/min/IP, `/admin/*` 60/min/IP. They're in-process; if this
   is ever scaled past one replica, move them to a shared store such as Redis.
 - **Requests:** 4 kb body limit; key and hwid length caps.
