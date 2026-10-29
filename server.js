@@ -1,6 +1,5 @@
-// afkstrike's own license server (53rd/54th-pass replacement for the
-// KeyAuth-backed gate) - a small Express app meant to run on Railway,
-// backed by Railway's Postgres plugin. See README.md in this folder for
+// AfkStrike's own license server - a small Express app meant to run on
+// Railway, backed by Railway's Postgres plugin. See README.md in this folder for
 // deploy steps and how the afkstrike desktop app talks to this.
 //
 // Design, in one paragraph: the desktop app never talks to a third
@@ -90,26 +89,18 @@ async function migrate() {
   await pool.query(`CREATE INDEX IF NOT EXISTS licenses_status_idx ON licenses (status);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS licenses_created_at_idx ON licenses (created_at DESC);`);
 
-  // Key expiry (56th pass). Added as a nullable column via ALTER rather
-  // than being folded into the CREATE TABLE above, so an existing
-  // deployment picks it up on its next boot without losing the keys it
-  // already has. NULL means "never expires", which is what every key
-  // issued before this existed is - so the feature arrives switched off
-  // for all of them rather than silently expiring anyone.
+  // Key expiry, as a nullable column added by ALTER so an older table
+  // picks it up on boot. NULL means "never expires".
   await pool.query(`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
-  // `note` removed outright (57th pass) at the owner's request. This is
-  // destructive and irreversible - any text previously stored in that
-  // column is gone the first time this runs. It was already unused by
-  // both the API and the dashboard before this.
+  // The `note` column was removed at the owner's request.
   await pool.query(`ALTER TABLE licenses DROP COLUMN IF EXISTS note;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS licenses_expires_at_idx ON licenses (expires_at);`);
   // For the dashboard's "online now" count and filter, which scans by
   // recency of the last check-in.
   await pool.query(`CREATE INDEX IF NOT EXISTS licenses_last_seen_idx ON licenses (last_seen_at DESC);`);
 
-  // Per-key history (58th pass). Answers the question every support
-  // conversation starts with - "it stopped working, what happened?" -
-  // which until now had no answer beyond a single last_seen timestamp.
+  // Per-key history. Answers the question every support conversation
+  // starts with - "it stopped working, what happened?"
   //
   // Keyed by the license *text*, deliberately with no foreign key to
   // `licenses`: a key's history has to survive the key being deleted,
@@ -215,7 +206,7 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(da, db);
 }
 
-// Readable license keys, `AFK-XXXX-XXXX-XXXX` (59th pass): a fixed
+// Readable license keys, `AFK-XXXX-XXXX-XXXX`: a fixed
 // brand prefix, then three groups of four from an alphabet with the
 // visually-confusable characters (0/O, 1/I/L) left out - the kind of
 // string a person can type correctly from a screen or read out loud.
@@ -338,10 +329,9 @@ const verifyLimiter = rateLimit({
   message: "Too many license checks from this address - wait a minute and try again.",
 });
 
-// Much tighter, because the thing being guessed here is a single
-// long-lived secret: 10 attempts a minute makes brute force hopeless
-// while leaving the dashboard (which fires a handful of calls per page
-// load) comfortable.
+// The thing being guessed here is a single long, random secret, so 60
+// attempts a minute is still hopeless for brute force while leaving the
+// dashboard (a handful of calls per page load) comfortable.
 const adminLimiter = rateLimit({
   windowMs: 60_000,
   max: 60,
@@ -586,10 +576,7 @@ const VERIFY_SQL = `WITH found AS (
 ///
 /// Why this exists: a SQL error in that statement is invisible until the
 /// first real activation, and then it locks out every customer at once.
-/// That isn't hypothetical - the 58th-pass rewrite of this statement had
-/// a doubled ")" that would have done exactly that, caught only because
-/// the test suite runs it. This makes the same mistake impossible to
-/// *deploy*: the process exits before listening, Railway's /health check
+/// This makes such a mistake impossible to *deploy*: the process exits before listening, Railway's /health check
 /// never passes, and the previous deployment keeps serving. It also
 /// covers a difference between the Postgres the tests ran on and the one
 /// in production.
@@ -1113,6 +1100,12 @@ app.get("/admin/stats/daily", adminLimiter, requireAdminSecret, ah(async (req, r
 // (a Postgres hiccup, etc.) lands here instead of taking the whole
 // process down or leaking a stack trace to the caller.
 app.use((err, _req, res, _next) => {
+  // A bad request body (too large, not JSON) is the caller's mistake, not
+  // a server fault: body-parser marks those with a 4xx status.
+  const status = err && (err.status || err.statusCode);
+  if (Number.isInteger(status) && status >= 400 && status < 500) {
+    return res.status(status).json({ success: false, error: "Bad request.", message: "Bad request." });
+  }
   console.error("Unhandled error:", err);
   res.status(500).json({ error: "Internal error." });
 });

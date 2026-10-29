@@ -13,12 +13,6 @@
 
   Nothing here is sensitive to serve statically: without the real
   secret every API call just gets a 401, same as a guess over curl.
-
-  56th pass: restyled (deeper surfaces, a wider radius scale, tabular
-  figures), the Note column removed, key expiry added, and the status
-  dropdown fixed - it rendered as a white OS-default list on a dark
-  page because nothing told the browser this page is dark. See the
-  `color-scheme` note on the select rule below.
 -->
 <html lang="en">
 <head>
@@ -32,9 +26,8 @@
        translucent whites over a gradient - layering rgba(255,255,255,
        0.04) three deep made every panel edge a slightly different
        muddy grey depending on what was behind it. */
-    /* 58th pass: moved from the magenta palette to the desktop app's
-       own flat indigo (its --accent #7c5cfc, sampled from the owner's
-       reference), so the dashboard and the app read as one product. */
+    /* The desktop app's own flat indigo (its --accent #7c5cfc), so the
+       dashboard and the app read as one product. */
     --bg: #0a0d16;
     --surface: #0f1323;
     --surface-2: #161b30;
@@ -388,7 +381,7 @@
   }
 
 
-  /* ---------- 58th pass additions ---------- */
+  /* ---------- Health tiles, chart, activity ---------- */
   /* Health tiles under the population bar: things you act on (who's
      running right now, whose key lapses this week) rather than shares
      of the total, which is why they're separate from the bar above. */

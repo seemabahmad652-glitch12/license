@@ -2,7 +2,7 @@
 
 The self-hosted license check behind AfkStrike's key screen, plus the files the app's
 auto-updater downloads. A small Node/Express app on Postgres, deployed on Railway at
-**https://license.lootbloxy.com**. It isn't part of the desktop app's build.
+**https://license-server-production-b453.up.railway.app**. It isn't part of the desktop app's build.
 
 | Route | Who calls it |
 | --- | --- |
@@ -17,9 +17,9 @@ auto-updater downloads. A small Node/Express app on Postgres, deployed on Railwa
 | | |
 | --- | --- |
 | GitHub | `seemabahmad652-glitch12/license`, branch `main`, files at the repo root (**public repo**) |
-| Railway | project `lootbloxy` → service `license-server` → env `production` |
+| Railway | project `afkstrike-license` → service `license-server` → env `production` |
 | Database | Railway Postgres, attached as `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` |
-| Domain | `license.lootbloxy.com` (CNAME to Railway; Railway issues TLS) |
+| Domain | `license-server-production-b453.up.railway.app` (Railway's own domain and TLS) |
 | Variables | `DATABASE_URL`, `CLIENT_SHARED_SECRET`, `ADMIN_SECRET` (`PORT` is injected) |
 
 **To update the server, push to `main`.** Railway builds `npm start` (`node server.js`),
@@ -80,7 +80,7 @@ instead of locking customers out.
 
 ## Admin dashboard
 
-Open https://license.lootbloxy.com/ and enter `ADMIN_SECRET` once per tab. The lock icon
+Open https://license-server-production-b453.up.railway.app/ and enter `ADMIN_SECRET` once per tab. The lock icon
 clears it.
 
 - **Overview:**
@@ -108,7 +108,7 @@ clears it.
 Every call needs the header `X-Admin-Secret: $ADMIN_SECRET`. Replace `$K` with a key.
 
 ```bash
-S=https://license.lootbloxy.com
+S=https://license-server-production-b453.up.railway.app
 H="X-Admin-Secret: $ADMIN_SECRET"
 J="Content-Type: application/json"
 
@@ -152,7 +152,9 @@ curl -X POST $S/admin/licenses/bulk -H "$H" -H "$J" \
 ## Hardening
 
 - The client IP is the right-most `X-Forwarded-For` hop (the one Railway appended),
-  normalised and length-capped.
+  normalised and length-capped. This is only right while nothing sits in front of
+  Railway: put Cloudflare or another proxy in front and every customer behind it would
+  share one rate-limit bucket.
 - **Rate limits:** `/verify` 30/min/IP, `/admin/*` 60/min/IP. They're in-process; if this
   is ever scaled past one replica, move them to a shared store such as Redis.
 - **Requests:** 4 kb body limit; key and hwid length caps.
@@ -164,7 +166,7 @@ curl -X POST $S/admin/licenses/bulk -H "$H" -H "$J" \
 ## Testing
 
 `test/run-tests.js` starts the real `server.js` against a real Postgres and drives it over
-HTTP. It covers device binding, the bind race, same-PC-after-a-change matching, both key formats, expiry
+HTTP. It covers device binding, the bind race, same-PC-after-a-change matching, the key format, expiry
 and extend, bulk actions, history, stats and daily stats, export, rate limits and gzip.
 **Run it before every push. It must end with 0 failures.**
 
