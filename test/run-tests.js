@@ -336,6 +336,19 @@ async function main() {
 
     const errs = srv.log().split("\n").filter((l) => /error/i.test(l));
     check("server logged no errors", errs.length === 0, errs.slice(0, 3));
+
+    section("Database connection loss");
+    {
+      await sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()");
+      await new Promise((r) => setTimeout(r, 300));
+      check("server survives losing its database connections", srv.child.exitCode === null, srv.log().slice(-300));
+      const health = await fetch(BASE + "/health");
+      check("health recovers on a new connection", health.status === 200, health.status);
+      const again = await verify("AFK-ZZZZ-ZZZZ-ZZZZ", "nope");
+      check("verify still answers afterwards", again.status === 200 && again.body.success === false, again);
+      const after = await admin("POST", "/admin/licenses", {});
+      check("a real database write works afterwards", after.status === 201, after.status);
+    }
   } finally {
     srv.child.kill();
     await pool.end();

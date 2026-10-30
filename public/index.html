@@ -433,7 +433,7 @@
   .tile .tv.bad { color: var(--bad); }
   .tile .tv.accent { color: var(--accent-3); }
   .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 rgba(52, 224, 192, 0.6); animation: pulse 2s infinite; }
-  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 224, 192, 0.55); } 70% { box-shadow: 0 0 0 7px rgba(52, 224, 192, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 224, 192, 0); } }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   @media (max-width: 860px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
   /* Quantity field in the create modal */
@@ -615,11 +615,11 @@
     position: absolute; border-radius: 50%; background: #ffffff; opacity: 0;
     box-shadow: 0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(255, 255, 255, 0.35);
     will-change: transform, opacity;
-    animation-name: amb-rise, amb-twinkle; animation-timing-function: linear, ease-in-out; animation-iteration-count: infinite, infinite;
+    animation-name: amb-spark; animation-timing-function: linear; animation-iteration-count: infinite;
   }
   .ambient-particle.is-teal { background: #34e0c0; box-shadow: 0 0 6px rgba(52, 224, 192, 0.9), 0 0 14px rgba(52, 224, 192, 0.35); }
-  @keyframes amb-rise { from { transform: translateY(30px); } to { transform: translateY(-90px); } }
-  @keyframes amb-twinkle { 0%, 100% { opacity: 0; } 50% { opacity: 0.95; } }
+  @keyframes amb-spark { 0% { transform: translateY(30px); opacity: 0; } 50% { opacity: 0.95; } 100% { transform: translateY(-90px); opacity: 0; } }
+  .fx-paused .ambient-light, .fx-paused .ambient-particle, .fx-paused .card-spark, .fx-paused .live-dot { animation-play-state: paused; }
 
   /* Cards let a little of the light through. */
   .overview, .chart-card, .table-wrap, .feed {
@@ -653,7 +653,7 @@
   .tile.lit::after { background: radial-gradient(200px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.1), transparent 55%); }
 
   /* Main buttons breathe a little. */
-  .btn-accent:not(:disabled), .gate-submit:not(:disabled) { animation: btn-glow 3.2s ease-in-out infinite; }
+  .btn-accent:not(:disabled), .gate-submit:not(:disabled) { animation: none; }
   /* With motion turned off in the OS, the sparks stay as faint still dots. */
   @media (prefers-reduced-motion: reduce) {
     .ambient-light, .ambient-particle, .card-spark, .btn-accent, .gate-submit { animation: none; }
@@ -930,8 +930,37 @@ function clearSecret() {
   try { localStorage.removeItem(SECRET_KEY); } catch { /* ignore */ }
 }
 
+// One request with a time limit, so a stuck connection can't leave the page
+// waiting forever. Long enough for the server to wake from sleep.
+const API_TIMEOUT_MS = 30000;
+async function apiFetch(path, options) {
+  try {
+    return await fetch(path, { ...options, signal: AbortSignal.timeout(API_TIMEOUT_MS) });
+  } catch (e) {
+    if (e && e.name === "TimeoutError") throw new Error("Failed to fetch: the server took too long to answer.");
+    throw e;
+  }
+}
+
+// Reads are tried again while the server wakes or redeploys. Changes are
+// never repeated automatically: the first try may have worked.
+const API_READ_RETRY_MS = [1000, 3000];
+async function apiWithRetry(path, options) {
+  const isRead = !options.method || options.method === "GET";
+  for (let attempt = 0; ; attempt++) {
+    const canRetry = isRead && attempt < API_READ_RETRY_MS.length;
+    try {
+      const res = await apiFetch(path, options);
+      if (!canRetry || ![502, 503, 504].includes(res.status)) return res;
+    } catch (e) {
+      if (!canRetry) throw e;
+    }
+    await new Promise((r) => setTimeout(r, API_READ_RETRY_MS[attempt]));
+  }
+}
+
 async function api(path, options = {}) {
-  const res = await fetch(path, {
+  const res = await apiWithRetry(path, {
     ...options,
     headers: {
       "X-Admin-Secret": getSecret(),
@@ -1868,16 +1897,15 @@ document.addEventListener("keydown", (e) => {
 (function ambient() {
   const box = document.getElementById("ambientParticles");
   if (box) {
-    for (let i = 0; i < 44; i++) {
+    for (let i = 0; i < 24; i++) {
       const p = document.createElement("span");
       p.className = "ambient-particle" + (i % 6 === 0 ? " is-teal" : "");
       const size = (1.8 + Math.random() * 2.8).toFixed(1);
       const rise = (10 + Math.random() * 14).toFixed(1);
-      const blink = (2.4 + Math.random() * 3.2).toFixed(1);
       p.style.cssText =
         `left:${(Math.random() * 100).toFixed(1)}%;top:${(Math.random() * 100).toFixed(1)}%;` +
-        `width:${size}px;height:${size}px;animation-duration:${rise}s,${blink}s;` +
-        `animation-delay:-${(Math.random() * rise).toFixed(1)}s,-${(Math.random() * blink).toFixed(1)}s`;
+        `width:${size}px;height:${size}px;animation-duration:${rise}s;` +
+        `animation-delay:-${(Math.random() * rise).toFixed(1)}s`;
       box.appendChild(p);
     }
   }
@@ -1908,6 +1936,15 @@ document.addEventListener("keydown", (e) => {
     });
   }, { passive: true });
 })();
+
+// The effects rest whenever the window isn't in front.
+function syncEffectsPause() {
+  document.body.classList.toggle("fx-paused", document.hidden || !document.hasFocus());
+}
+document.addEventListener("visibilitychange", syncEffectsPause);
+window.addEventListener("blur", syncEffectsPause);
+window.addEventListener("focus", syncEffectsPause);
+syncEffectsPause();
 </script>
 </body>
 </html>

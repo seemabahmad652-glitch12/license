@@ -116,6 +116,32 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+// A pooled connection that dies while idle (a Postgres restart, a network
+// blip) is reported here. With no listener Node treats it as an uncaught
+// error and the whole server exits. The pool replaces the connection itself.
+pool.on("error", (e) => console.warn("Idle database connection lost:", e.message));
+
+/// Errors that mean "the database couldn't be reached right now", as
+/// opposed to a bad statement: refused or dropped connections, the pool's
+/// connect timeout, and Postgres's own shutting-down and starting-up codes.
+const TRANSIENT_DB_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EAI_AGAIN", "57P01", "57P02", "57P03", "08001", "08006"]);
+function isTransientDbError(e) {
+  return !!e && (TRANSIENT_DB_CODES.has(e.code) || /timeout exceeded when trying to connect|connection terminated/i.test(e.message || ""));
+}
+
+/// Runs `fn`, trying again on a transient database error. Only for work
+/// that is safe to repeat.
+async function withDbRetry(fn, { attempts = 3, delayMs = 400 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (attempt >= attempts || !isTransientDbError(e)) throw e;
+      await new Promise((r) => setTimeout(r, delayMs * attempt));
+    }
+  }
+}
+
 async function migrate() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS licenses (
@@ -468,14 +494,21 @@ function gzipResponses(req, res, next) {
       if (body.length) res.setHeader("Content-Length", body.length);
       return end(body, done);
     }
-    const gz = zlib.gzipSync(body, { level: 6 });
-    res.setHeader("Content-Encoding", "gzip");
-    res.setHeader("Content-Length", gz.length);
-    // A strong ETag names the uncompressed bytes; marked weak once the
-    // representation changes, which is what HTTP asks for.
-    const etag = res.getHeader("etag");
-    if (typeof etag === "string" && !etag.startsWith("W/")) res.setHeader("ETag", `W/${etag}`);
-    return end(gz, done);
+    // Off the main thread, so a large export can't hold up license checks.
+    zlib.gzip(body, { level: 6 }, (err, gz) => {
+      if (err) {
+        res.setHeader("Content-Length", body.length);
+        return end(body, done);
+      }
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Content-Length", gz.length);
+      // A strong ETag names the uncompressed bytes; marked weak once the
+      // representation changes, which is what HTTP asks for.
+      const etag = res.getHeader("etag");
+      if (typeof etag === "string" && !etag.startsWith("W/")) res.setHeader("ETag", `W/${etag}`);
+      end(gz, done);
+    });
+    return res;
   };
   next();
 }
@@ -687,7 +720,9 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   //     the updated row - so two PCs racing on one fresh key bind once.
   //     Gating on `found` instead would let both through.
   // A row with `updated = 0` is therefore an active key on another PC.
-  const { rows } = await pool.query(VERIFY_SQL, [key, hwid, clientIp(req), parts]);
+  // Safe to repeat: a second run sees the device already bound and changes
+  // nothing further.
+  const { rows } = await withDbRetry(() => pool.query(VERIFY_SQL, [key, hwid, clientIp(req), parts]));
 
   const license = rows[0];
   if (!license) {
@@ -1159,11 +1194,19 @@ app.use((err, _req, res, _next) => {
     return res.status(status).json({ success: false, error: "Bad request.", message: "Bad request." });
   }
   console.error("Unhandled error:", err);
+  // The database being away is temporary, and callers should hear that.
+  if (isTransientDbError(err)) {
+    res.setHeader("Retry-After", "5");
+    return res.status(503).json({ success: false, error: "Temporarily unavailable.", message: "Temporarily unavailable." });
+  }
   res.status(500).json({ error: "Internal error." });
 });
 
-migrate()
-  .then(checkVerifyStatement)
+// The database can still be starting when this boots (both wake from sleep
+// together), so an unreachable database gets about 30 s before giving up. A
+// bad statement isn't transient and still fails at once.
+withDbRetry(migrate, { attempts: 8, delayMs: 1000 })
+  .then(() => withDbRetry(checkVerifyStatement))
   .then(() => {
     pruneEvents();
     setInterval(pruneEvents, 60 * 60 * 1000).unref();
@@ -1172,6 +1215,13 @@ migrate()
       console.log(`afkstrike license server listening on :${PORT}`);
       console.log(`licence signing public key: ${signingPublicHex}`);
     });
+
+    // Node drops an idle connection after 5 s by default. Railway's proxy
+    // keeps its own open longer and can send a request down one just as Node
+    // closes it, which reaches the caller as a random 502. Staying open
+    // longer than the proxy closes that gap.
+    server.keepAliveTimeout = 65_000;
+    server.headersTimeout = 66_000;
 
     // Railway sends SIGTERM and then kills the container shortly
     // after, on every redeploy. Without handling it, in-flight
@@ -1190,6 +1240,9 @@ migrate()
         }
         process.exit(0);
       });
+      // Idle keep-alive connections would otherwise hold close() open until
+      // the backstop below.
+      server.closeIdleConnections();
       // Backstop: if something refuses to let go, don't hang until the
       // platform SIGKILLs us anyway.
       setTimeout(() => process.exit(0), 10_000).unref();
