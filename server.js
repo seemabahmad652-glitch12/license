@@ -81,6 +81,24 @@ const signingPublicHex = crypto
   .subarray(-32)
   .toString("hex");
 
+// A signed "no" (v 2), so the app can tell a real refusal from a captive
+// portal, proxy or fake server, none of which should be able to lock out a
+// paying customer. v 2 can never be mistaken for a "yes": the app only
+// accepts v 1 as one.
+function signDenial({ key, hwid, nonce, message }) {
+  const payload = b64url(JSON.stringify({
+    v: 2,
+    deny: true,
+    kh: crypto.createHash("sha256").update(key).digest("hex"),
+    hwid,
+    iat: Math.floor(Date.now() / 1000),
+    nonce,
+    msg: message,
+  }));
+  const sig = crypto.sign(null, Buffer.from(payload), signingKey);
+  return `${payload}.${b64url(sig)}`;
+}
+
 const b64url = (buf) => Buffer.from(buf).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 
 function signLicenseToken({ key, hwid, expiresAt, nonce }) {
@@ -173,6 +191,10 @@ async function migrate() {
   // For the dashboard's "online now" count and filter, which scans by
   // recency of the last check-in.
   await pool.query(`CREATE INDEX IF NOT EXISTS licenses_last_seen_idx ON licenses (last_seen_at DESC);`);
+  // A key sold with a length of time, such as 30 days. While expires_at is
+  // NULL the clock hasn't started: the first activation sets expires_at from
+  // this, so a key waiting in a shop doesn't lose any time.
+  await pool.query(`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS duration_days INT;`);
 
   // Per-key history. Answers the question every support conversation
   // starts with - "it stopped working, what happened?"
@@ -269,6 +291,51 @@ function resolveExpiry(body) {
   }
 
   return { value: null };
+}
+
+/// Reads a duration: "30d", 30, or "lifetime". Returns { days } (null for
+/// lifetime) or { error }.
+function parseDuration(raw) {
+  if (raw === "lifetime") return { days: null };
+  const match = /^(\d{1,4})d?$/.exec(String(raw ?? "").trim().toLowerCase());
+  const days = match ? Number(match[1]) : NaN;
+  if (!Number.isInteger(days) || days < 1 || days > 3650) {
+    return { error: "A duration is 1 to 3650 days (such as 30d), or lifetime." };
+  }
+  return { days };
+}
+
+/// The columns a duration sets. `starts` is "activation" (the clock starts on
+/// first use) or "now".
+function durationColumns(body, defaultStart) {
+  const parsed = parseDuration(body.duration);
+  if (parsed.error) return parsed;
+  if (parsed.days === null) return { expires_at: null, duration_days: null, detail: "lifetime" };
+  const starts = body.starts === undefined ? defaultStart : body.starts;
+  if (starts !== "activation" && starts !== "now") return { error: "starts must be activation or now." };
+  if (starts === "activation") {
+    return { expires_at: null, duration_days: parsed.days, detail: `${parsed.days} days from first activation` };
+  }
+  return {
+    expires_at: new Date(Date.now() + parsed.days * 24 * 60 * 60 * 1000),
+    duration_days: parsed.days,
+    detail: `${parsed.days} days from now`,
+  };
+}
+
+/// What an admin request sets a key's time to: `duration` (what the dashboard
+/// sends), else the older `expires_in_days` / `expires_at`.
+function resolveTime(body, defaultStart) {
+  if (body && body.duration !== undefined && body.duration !== null && body.duration !== "") {
+    return durationColumns(body, defaultStart);
+  }
+  const expiry = resolveExpiry(body);
+  if (expiry.error) return expiry;
+  return {
+    expires_at: expiry.value,
+    duration_days: null,
+    detail: expiry.value ? `expires ${expiry.value.toISOString()}` : "never expires",
+  };
 }
 
 // Constant-time-ish string comparison via fixed-length digests, so two
@@ -409,7 +476,9 @@ const verifyLimiter = rateLimit({
 // dashboard (a handful of calls per page load) comfortable.
 const adminLimiter = rateLimit({
   windowMs: 60_000,
-  max: 60,
+  // Roomy for a working dashboard; a wrong secret has its own much smaller
+  // allowance (requireAdminSecret).
+  max: 300,
   keyOf: (req) => `admin:${clientIp(req)}`,
   message: "Too many admin requests from this address - wait a minute and try again.",
 });
@@ -423,7 +492,21 @@ app.disable("x-powered-by");
 // `express.json()`'s own default limit is 100kb, which is already far
 // more than {key, hwid} needs - tightened to 4kb so an oversized body
 // is rejected before it is parsed and buffered at all.
-app.use(express.json({ limit: "4kb" }));
+//
+// Admin requests can carry more: a bulk action's list of keys, and a restore.
+const jsonSmall = express.json({ limit: "4kb" });
+const jsonAdmin = express.json({ limit: "64kb" });
+const jsonRestore = express.json({ limit: "8mb" });
+app.use((req, res, next) => {
+  if (req.path === "/admin/restore") return jsonRestore(req, res, next);
+  return (req.path.startsWith("/admin/") ? jsonAdmin : jsonSmall)(req, res, next);
+});
+
+// Answers from the API are never worth caching.
+app.use(["/verify", "/admin"], (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 // The admin dashboard is the only HTML this serves, and it holds the
 // admin secret in sessionStorage - so it should not be framable by
@@ -591,12 +674,29 @@ function requireClientSecret(req, res, next) {
   next();
 }
 
+// Wrong secrets get a far smaller allowance than a signed-in dashboard: ten
+// tries per address, per five minutes. Right ones don't use any of it, so a
+// lockout from guessing can't follow you in once you've got it right.
+const ADMIN_FAIL_MAX = 10;
+const ADMIN_FAIL_WINDOW_MS = 5 * 60_000;
+
 function requireAdminSecret(req, res, next) {
+  const bucketKey = `adminfail:${clientIp(req)}`;
+  const now = Date.now();
+  let bucket = rateBuckets.get(bucketKey);
+  if (bucket && now >= bucket.resetAt) bucket = null;
   const provided = req.headers["x-admin-secret"];
-  if (typeof provided !== "string" || !safeEqual(provided, ADMIN_SECRET)) {
-    return res.status(401).json({ error: "Unauthorized." });
+  if (typeof provided === "string" && safeEqual(provided, ADMIN_SECRET)) return next();
+  if (bucket && bucket.count >= ADMIN_FAIL_MAX) {
+    res.setHeader("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
+    return res.status(429).json({ error: "Too many wrong secrets from this address. Wait a few minutes." });
   }
-  next();
+  if (!bucket) {
+    bucket = { count: 0, resetAt: now + ADMIN_FAIL_WINDOW_MS };
+    rateBuckets.set(bucketKey, bucket);
+  }
+  bucket.count += 1;
+  return res.status(401).json({ error: "Unauthorized." });
 }
 
 // The whole /verify decision, as one statement - see the long comment
@@ -612,17 +712,24 @@ const VERIFY_SQL = `WITH found AS (
               -- Always the NEW digest: this is the first-time bind, and
               -- the rebind when the same PC changed a little.
               hwid = $2,
-              hw_parts = COALESCE($4::jsonb, l.hw_parts)
+              hw_parts = COALESCE($4::jsonb, l.hw_parts),
+              -- A key sold as a length of time starts its clock here, on
+              -- first use. Set once: later checks and device resets keep it.
+              expires_at = CASE
+                WHEN l.expires_at IS NULL AND l.duration_days IS NOT NULL
+                  THEN now() + make_interval(days => l.duration_days)
+                ELSE l.expires_at
+              END
         WHERE l.id = (SELECT id FROM found)
           AND l.status = 'active'
           AND (l.expires_at IS NULL OR l.expires_at > now())
           AND (l.hwid IS NULL OR l.hwid = $2 OR afk_parts_match(l.hw_parts, $4::jsonb))
-       RETURNING l.id
+       RETURNING l.id, l.expires_at
      ), outcome AS (
        SELECT f.status,
               (f.hwid IS NULL) AS was_unbound,
               (f.expires_at IS NOT NULL AND f.expires_at <= now()) AS is_expired,
-              f.expires_at,
+              COALESCE((SELECT expires_at FROM upd), f.expires_at) AS expires_at,
               f.hwid AS prior_hwid,
               (SELECT count(*) FROM upd)::int AS updated
          FROM found f
@@ -697,20 +804,25 @@ function cleanParts(raw) {
 // The rate limiter runs BEFORE requireClientSecret on purpose: callers
 // without the secret are throttled too, before any hashing work.
 app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
-  const key = typeof req.body.key === "string" ? req.body.key.trim() : "";
-  const hwid = typeof req.body.hwid === "string" ? req.body.hwid.trim() : "";
+  const body = req.body || {};
+  const key = typeof body.key === "string" ? body.key.trim() : "";
+  const hwid = typeof body.hwid === "string" ? body.hwid.trim() : "";
   if (!key || !hwid) {
     return res.status(400).json({ success: false, message: "Missing key or hwid." });
   }
   if (key.length > MAX_FIELD_LEN || hwid.length > MAX_FIELD_LEN) {
     return res.status(400).json({ success: false, message: "Malformed key or hwid." });
   }
+  const parts = cleanParts(body.parts);
+  const nonce = typeof body.nonce === "string" && /^[0-9a-f]{32}$/.test(body.nonce) ? body.nonce : null;
+  // Every refusal is signed for the request that asked, when it sent a nonce.
+  const refuse = (message) => res.json({
+    success: false,
+    message,
+    ...(nonce ? { denial: signDenial({ key, hwid, nonce, message }) } : {}),
+  });
   // Not a key this server could have issued: no database work at all.
-  if (!KEY_SHAPE.test(key)) {
-    return res.json({ success: false, message: "Invalid license key." });
-  }
-  const parts = cleanParts(req.body.parts);
-  const nonce = typeof req.body.nonce === "string" && /^[0-9a-f]{32}$/.test(req.body.nonce) ? req.body.nonce : null;
+  if (!KEY_SHAPE.test(key)) return refuse("Invalid license key.");
 
   // One statement decides everything (see VERIFY_SQL):
   //   - `found` reads the row as it was, only to choose the message;
@@ -725,23 +837,14 @@ app.post("/verify", verifyLimiter, requireClientSecret, ah(async (req, res) => {
   const { rows } = await withDbRetry(() => pool.query(VERIFY_SQL, [key, hwid, clientIp(req), parts]));
 
   const license = rows[0];
-  if (!license) {
-    return res.json({ success: false, message: "Invalid license key." });
-  }
-  if (license.status !== "active") {
-    return res.json({ success: false, message: "This license key has been revoked." });
-  }
+  if (!license) return refuse("Invalid license key.");
+  if (license.status !== "active") return refuse("This license key has been revoked.");
   // Before the device check: an expired key on another PC should say it
   // expired - that's what the person has to act on. (The UPDATE's guard
   // already refused it; this only picks the message.)
-  if (license.is_expired) {
-    return res.json({ success: false, message: "This license key has expired." });
-  }
+  if (license.is_expired) return refuse("This license key has expired.");
   if (license.updated === 0) {
-    return res.json({
-      success: false,
-      message: "This key is already activated on another PC. Ask on our Discord to move it to this one.",
-    });
+    return refuse("This key is already activated on another PC. Ask on our Discord to move it to this one.");
   }
   return res.json({
     success: true,
@@ -789,31 +892,31 @@ const MAX_BULK = 100;
 // in a 31^12 keyspace, but checked rather than trusted away) are
 // regenerated and retried - so a batch of 100 is one round trip, not 100.
 app.post("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res) => {
-  const expiry = resolveExpiry(req.body);
-  if (expiry.error) return res.status(400).json({ error: expiry.error });
+  // From the dashboard, a duration's clock starts on first activation.
+  const time = resolveTime(req.body, "activation");
+  if (time.error) return res.status(400).json({ error: time.error });
 
   const bulk = req.body && req.body.count !== undefined && req.body.count !== null && req.body.count !== "";
   const count = bulk ? Number(req.body.count) : 1;
   if (!Number.isInteger(count) || count < 1 || count > MAX_BULK) {
     return res.status(400).json({ error: `count must be a whole number from 1 to ${MAX_BULK}.` });
   }
-  const detail = expiry.value ? `expires ${expiry.value.toISOString()}` : "never expires";
 
   const created = [];
   for (let attempt = 0; attempt < 5 && created.length < count; attempt++) {
     const wanted = Array.from({ length: count - created.length }, generateLicenseKey);
     const { rows } = await pool.query(
       `WITH ins AS (
-         INSERT INTO licenses (license_key, expires_at)
-         SELECT k, $2::timestamptz FROM unnest($1::text[]) AS k
+         INSERT INTO licenses (license_key, expires_at, duration_days)
+         SELECT k, $2::timestamptz, $5::int FROM unnest($1::text[]) AS k
          ON CONFLICT (license_key) DO NOTHING
-         RETURNING id, license_key, status, created_at, expires_at
+         RETURNING id, license_key, status, created_at, expires_at, duration_days
        ), ev AS (
          INSERT INTO license_events (license_key, event, detail, ip)
          SELECT license_key, 'created', $3, $4 FROM ins
        )
        SELECT * FROM ins ORDER BY id`,
-      [wanted, expiry.value, detail, clientIp(req)]
+      [wanted, time.expires_at, time.detail, clientIp(req), time.duration_days]
     );
     created.push(...rows);
   }
@@ -835,7 +938,19 @@ const DERIVED_FILTERS = {
   // seen in the last ten is, for practical purposes, running right now.
   online: `status = 'active' AND last_seen_at > now() - interval '10 minutes'`,
   unused: `hwid IS NULL AND last_seen_at IS NULL`,
+  // Sold as a length of time, with the clock waiting for first use.
+  waiting: `expires_at IS NULL AND duration_days IS NOT NULL`,
+  lifetime: `expires_at IS NULL AND duration_days IS NULL`,
 };
+
+// `id` breaks ties: a batch of keys shares one created_at, and without it they
+// could change places between one page and the next.
+const LICENSE_SORTS = {
+  created: "created_at DESC, id DESC",
+  expires: "expires_at ASC NULLS LAST, created_at DESC, id DESC",
+  seen: "last_seen_at DESC NULLS LAST, created_at DESC, id DESC",
+};
+const LICENSE_COLUMNS = "id, license_key, hwid, status, created_at, expires_at, duration_days, last_seen_at, last_seen_ip";
 
 function buildLicenseQuery(query) {
   const conditions = [];
@@ -867,13 +982,16 @@ app.get("/admin/licenses", adminLimiter, requireAdminSecret, ah(async (req, res)
   params.push(offset);
   const offsetP = `$${params.length}`;
 
+  const order = LICENSE_SORTS[req.query.sort] || LICENSE_SORTS.created;
   const { rows } = await pool.query(
-    `SELECT id, license_key, hwid, status, created_at, expires_at, last_seen_at, last_seen_ip
+    `SELECT ${LICENSE_COLUMNS}, count(*) OVER()::int AS total_matching
        FROM licenses ${where}
-      ORDER BY created_at DESC LIMIT ${limitP} OFFSET ${offsetP}`,
+      ORDER BY ${order} LIMIT ${limitP} OFFSET ${offsetP}`,
     params
   );
-  res.json(rows);
+  // The list stays a bare array; how many match in all travels in a header.
+  res.setHeader("X-Total-Count", String(rows.length ? rows[0].total_matching : 0));
+  res.json(rows.map(({ total_matching, ...row }) => row));
 }));
 
 // Every number the dashboard's overview shows, in one pass over the
@@ -891,6 +1009,8 @@ app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (_req, res) =
             (count(*) FILTER (WHERE ${DERIVED_FILTERS.online}))::int            AS online,
             (count(*) FILTER (WHERE ${DERIVED_FILTERS.unused}))::int            AS never_used,
             (count(*) FILTER (WHERE created_at > now() - interval '7 days'))::int AS created_7d,
+            (count(*) FILTER (WHERE ${DERIVED_FILTERS.waiting}))::int           AS waiting,
+            (count(*) FILTER (WHERE ${DERIVED_FILTERS.lifetime}))::int          AS lifetime,
             ev.activations_24h, ev.device_rejections_24h, ev.device_updates_24h
        FROM licenses,
             -- One round trip: the 24-hour event counts ride along.
@@ -901,7 +1021,7 @@ app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (_req, res) =
       GROUP BY ev.activations_24h, ev.device_rejections_24h, ev.device_updates_24h`
   );
   const r = rows[0] || { total: 0, bound: 0, active: 0, revoked: 0, expired: 0, expiring_soon: 0,
-    online: 0, never_used: 0, created_7d: 0, activations_24h: 0, device_rejections_24h: 0, device_updates_24h: 0 };
+    online: 0, never_used: 0, created_7d: 0, waiting: 0, lifetime: 0, activations_24h: 0, device_rejections_24h: 0, device_updates_24h: 0 };
   res.json({
     total: r.total,
     bound: r.bound,
@@ -912,10 +1032,117 @@ app.get("/admin/stats", adminLimiter, requireAdminSecret, ah(async (_req, res) =
     online: r.online,
     neverUsed: r.never_used,
     created7d: r.created_7d,
+    waiting: r.waiting,
+    lifetime: r.lifetime,
     activations24h: r.activations_24h,
     deviceRejections24h: r.device_rejections_24h,
     deviceUpdates24h: r.device_updates_24h,
   });
+}));
+
+// One key in full, for the dashboard's detail panel: the row, plus what its
+// history says about it.
+app.get("/admin/licenses/:key", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+  const { rows } = await pool.query(`SELECT ${LICENSE_COLUMNS} FROM licenses WHERE license_key = $1`, [req.params.key]);
+  if (rows.length === 0) return res.status(404).json({ error: "No license with that key." });
+  const { rows: summary } = await pool.query(
+    `SELECT min(created_at) FILTER (WHERE event = 'activated') AS first_activated_at,
+            (count(*) FILTER (WHERE event = 'device_reset'))::int AS device_resets,
+            (count(*) FILTER (WHERE event = 'device_updated'))::int AS device_updates,
+            (count(*) FILTER (WHERE event = 'rejected_device'))::int AS wrong_device_tries,
+            (count(DISTINCT hwid) FILTER (WHERE hwid IS NOT NULL))::int AS devices_seen,
+            (count(DISTINCT ip) FILTER (WHERE event IN ('activated', 'rejected_device', 'device_updated')))::int AS addresses_seen
+       FROM license_events WHERE license_key = $1`,
+    [req.params.key]
+  );
+  res.json({ ...rows[0], ...summary[0] });
+}));
+
+// Keys worth a look: another device keeps trying them, or their device keeps
+// being reset. Both are what a shared key looks like.
+const ATTENTION_DEVICE_TRIES = 3;
+const ATTENTION_RESETS = 3;
+app.get("/admin/attention", adminLimiter, requireAdminSecret, ah(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT license_key,
+            (count(*) FILTER (WHERE event = 'rejected_device' AND created_at > now() - interval '7 days'))::int AS wrong_device_tries,
+            (count(*) FILTER (WHERE event = 'device_reset' AND created_at > now() - interval '30 days'))::int AS device_resets,
+            (count(DISTINCT hwid) FILTER (WHERE event = 'rejected_device' AND created_at > now() - interval '7 days'))::int AS other_devices,
+            max(created_at) AS last_at
+       FROM license_events
+      WHERE created_at > now() - interval '30 days' AND event IN ('rejected_device', 'device_reset')
+      GROUP BY license_key
+     HAVING (count(*) FILTER (WHERE event = 'rejected_device' AND created_at > now() - interval '7 days')) >= $1
+         OR (count(*) FILTER (WHERE event = 'device_reset' AND created_at > now() - interval '30 days')) >= $2
+      ORDER BY last_at DESC LIMIT 25`,
+    [ATTENTION_DEVICE_TRIES, ATTENTION_RESETS]
+  );
+  res.json(rows);
+}));
+
+// What the Tools tab shows. The public half of the signing key is meant to be
+// compared with the copy compiled into the app.
+const STARTED_AT = Date.now();
+app.get("/admin/system", adminLimiter, requireAdminSecret, ah(async (_req, res) => {
+  const started = process.hrtime.bigint();
+  const { rows } = await pool.query(
+    `SELECT (SELECT count(*)::int FROM licenses) AS licenses,
+            (SELECT count(*)::int FROM license_events) AS events,
+            pg_database_size(current_database())::bigint AS database_bytes`
+  );
+  res.json({
+    ...rows[0],
+    database_bytes: Number(rows[0].database_bytes),
+    database_ms: Math.round(Number(process.hrtime.bigint() - started) / 1e6),
+    uptime_seconds: Math.round((Date.now() - STARTED_AT) / 1000),
+    node: process.version,
+    commit: (process.env.RAILWAY_GIT_COMMIT_SHA || "").slice(0, 7) || null,
+    signing_public_key: signingPublicHex,
+    event_retention_days: EVENT_RETENTION_DAYS,
+  });
+}));
+
+// Everything needed to rebuild the licenses table.
+app.get("/admin/backup.json", adminLimiter, requireAdminSecret, ah(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT license_key, hwid, hw_parts, status, created_at, expires_at, duration_days, last_seen_at, last_seen_ip
+       FROM licenses ORDER BY id`
+  );
+  res.setHeader("Content-Disposition", `attachment; filename="afkstrike-licenses-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.json({ format: "afkstrike-licenses", version: 1, exported_at: new Date().toISOString(), licenses: rows });
+}));
+
+// Adds keys from a backup. Never changes a key that already exists, so
+// restoring an old backup can't undo a revoke or give back used time.
+const RESTORE_MAX = 20000;
+app.post("/admin/restore", adminLimiter, requireAdminSecret, ah(async (req, res) => {
+  const body = req.body || {};
+  if (body.format !== "afkstrike-licenses" || !Array.isArray(body.licenses)) {
+    return res.status(400).json({ error: "That isn't an AfkStrike backup file." });
+  }
+  if (body.licenses.length > RESTORE_MAX) return res.status(400).json({ error: `A backup can hold up to ${RESTORE_MAX} keys.` });
+  const validDate = (d) => d === null || d === undefined || !Number.isNaN(new Date(d).getTime());
+  const clean = body.licenses.filter((l) => l && typeof l.license_key === "string" && KEY_SHAPE.test(l.license_key)
+    && LICENSE_STATUSES.includes(l.status) && validDate(l.expires_at) && validDate(l.created_at) && validDate(l.last_seen_at)
+    && (l.duration_days === null || l.duration_days === undefined || (Number.isInteger(l.duration_days) && l.duration_days >= 1 && l.duration_days <= 3650)));
+  const { rows } = await pool.query(
+    `WITH src AS (
+       SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(license_key text, hwid text, hw_parts jsonb, status text,
+         created_at timestamptz, expires_at timestamptz, duration_days int, last_seen_at timestamptz, last_seen_ip text)
+     ), ins AS (
+       INSERT INTO licenses (license_key, hwid, hw_parts, status, created_at, expires_at, duration_days, last_seen_at, last_seen_ip)
+       SELECT license_key, hwid, hw_parts, status, COALESCE(created_at, now()), expires_at, duration_days, last_seen_at, last_seen_ip FROM src
+       ON CONFLICT (license_key) DO NOTHING
+       RETURNING license_key
+     ), ev AS (
+       INSERT INTO license_events (license_key, event, detail, ip)
+       SELECT license_key, 'restored', NULL, $2 FROM ins
+     )
+     SELECT count(*)::int AS added FROM ins`,
+    [JSON.stringify(clean), clientIp(req)]
+  );
+  const added = rows[0].added;
+  res.json({ ok: true, in_file: body.licenses.length, invalid: body.licenses.length - clean.length, added, already_here: clean.length - added });
 }));
 
 // One key's history, newest first.
@@ -929,13 +1156,33 @@ app.get("/admin/licenses/:key/events", adminLimiter, requireAdminSecret, ah(asyn
   res.json(rows);
 }));
 
-// The recent-activity feed across every key.
+// The activity feed across every key, newest first. `type` narrows it,
+// `key` searches by key, and `before` (an id) fetches the next page.
+const EVENT_TYPES = {
+  activations: `event IN ('activated', 'device_updated')`,
+  refused: `event LIKE 'rejected%'`,
+  admin: `event NOT LIKE 'rejected%' AND event NOT IN ('activated', 'device_updated')`,
+};
 app.get("/admin/events", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 500);
+  const params = [limit];
+  const where = [];
+  if (EVENT_TYPES[req.query.type]) where.push(EVENT_TYPES[req.query.type]);
+  const before = parseInt(req.query.before, 10);
+  if (Number.isInteger(before) && before > 0) {
+    params.push(before);
+    where.push(`id < $${params.length}`);
+  }
+  const key = typeof req.query.key === "string" ? req.query.key.trim().slice(0, 64) : "";
+  if (key) {
+    params.push(`%${key}%`);
+    where.push(`license_key ILIKE $${params.length}`);
+  }
   const { rows } = await pool.query(
-    `SELECT license_key, event, detail, ip, hwid, created_at FROM license_events
-      ORDER BY created_at DESC, id DESC LIMIT $1`,
-    [limit]
+    `SELECT id, license_key, event, detail, ip, hwid, created_at FROM license_events
+      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY id DESC LIMIT $1`,
+    params
   );
   res.json(rows);
 }));
@@ -957,13 +1204,13 @@ function csvCell(value) {
 app.get("/admin/export.csv", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const { where, params } = buildLicenseQuery(req.query);
   const { rows } = await pool.query(
-    `SELECT license_key, status, hwid, created_at, expires_at, last_seen_at, last_seen_ip
+    `SELECT license_key, status, hwid, created_at, expires_at, duration_days, last_seen_at, last_seen_ip
        FROM licenses ${where} ORDER BY created_at DESC`,
     params
   );
-  const header = ["license_key", "status", "device", "created_at", "expires_at", "last_seen_at", "last_seen_ip"];
+  const header = ["license_key", "status", "device", "created_at", "expires_at", "duration_days", "last_seen_at", "last_seen_ip"];
   const body = rows.map((r) =>
-    [r.license_key, r.status, r.hwid, r.created_at, r.expires_at, r.last_seen_at, r.last_seen_ip].map(csvCell).join(",")
+    [r.license_key, r.status, r.hwid, r.created_at, r.expires_at, r.duration_days, r.last_seen_at, r.last_seen_ip].map(csvCell).join(",")
   );
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="licenses-${new Date().toISOString().slice(0, 10)}.csv"`);
@@ -989,27 +1236,25 @@ for (const [action, toStatus] of [
   }));
 }
 
-// Sets or clears one key's expiry - same body as creating a key
-// (`expires_in_days` or `expires_at`); neither, or 0 days, clears it to
-// "never expires". Counted from *now*. For "add 30 days to what they
-// have", use /extend instead.
+// Replaces one key's time - same body as creating a key; counted from now
+// unless it says `starts: "activation"`. For "add 30 days to what they have",
+// use /extend instead.
 app.post("/admin/licenses/:key/expiry", adminLimiter, requireAdminSecret, ah(async (req, res) => {
-  const expiry = resolveExpiry(req.body);
-  if (expiry.error) return res.status(400).json({ error: expiry.error });
-  const detail = expiry.value ? `set to ${expiry.value.toISOString()}` : "set to never expires";
+  const time = resolveTime(req.body, "now");
+  if (time.error) return res.status(400).json({ error: time.error });
   const { rows } = await pool.query(
     `WITH m AS (
-       UPDATE licenses SET expires_at = $1::timestamptz WHERE license_key = $2
-       RETURNING license_key, expires_at
+       UPDATE licenses SET expires_at = $1::timestamptz, duration_days = $5::int WHERE license_key = $2
+       RETURNING license_key, expires_at, duration_days
      ), ev AS (
        INSERT INTO license_events (license_key, event, detail, ip)
        SELECT license_key, 'expiry_changed', $3, $4 FROM m
      )
-     SELECT license_key, expires_at FROM m`,
-    [expiry.value, req.params.key, detail, clientIp(req)]
+     SELECT license_key, expires_at, duration_days FROM m`,
+    [time.expires_at, req.params.key, time.detail, clientIp(req), time.duration_days]
   );
   if (rows.length === 0) return res.status(404).json({ error: "No license with that key." });
-  res.json({ ok: true, expires_at: rows[0].expires_at });
+  res.json({ ok: true, expires_at: rows[0].expires_at, duration_days: rows[0].duration_days });
 }));
 
 // Adds days to a key - what a renewal actually is. Extends from the
@@ -1017,9 +1262,13 @@ app.post("/admin/licenses/:key/expiry", adminLimiter, requireAdminSecret, ah(asy
 // already lapsed, so renewing an expired key gives the full period from
 // today rather than a period that's partly already gone.
 //
+// A key whose clock hasn't started just gets a longer duration.
+//
 // Refused for a key that never expires: there's nothing to add to, and
 // silently turning a lifetime key into a 30-day one would be the worst
 // possible reading of "extend".
+const EXTEND_SET = `duration_days = CASE WHEN expires_at IS NULL THEN duration_days + $2::int ELSE duration_days END,
+          expires_at = CASE WHEN expires_at IS NULL THEN NULL ELSE GREATEST(expires_at, now()) + make_interval(days => $2::int) END`;
 app.post("/admin/licenses/:key/extend", adminLimiter, requireAdminSecret, ah(async (req, res) => {
   const days = Number(req.body && req.body.days);
   if (!Number.isInteger(days) || days < 1 || days > 3650) {
@@ -1028,23 +1277,23 @@ app.post("/admin/licenses/:key/extend", adminLimiter, requireAdminSecret, ah(asy
   const { rows } = await pool.query(
     `WITH m AS (
        UPDATE licenses
-          SET expires_at = GREATEST(expires_at, now()) + make_interval(days => $2::int)
-        WHERE license_key = $1 AND expires_at IS NOT NULL
-       RETURNING license_key, expires_at
+          SET ${EXTEND_SET}
+        WHERE license_key = $1 AND (expires_at IS NOT NULL OR duration_days IS NOT NULL)
+       RETURNING license_key, expires_at, duration_days
      ), ev AS (
        INSERT INTO license_events (license_key, event, detail, ip)
        SELECT license_key, 'extended', $3, $4 FROM m
      )
-     SELECT license_key, expires_at FROM m`,
+     SELECT license_key, expires_at, duration_days FROM m`,
     [req.params.key, days, `+${days} days`, clientIp(req)]
   );
-  if (rows.length > 0) return res.json({ ok: true, expires_at: rows[0].expires_at });
+  if (rows.length > 0) return res.json({ ok: true, expires_at: rows[0].expires_at, duration_days: rows[0].duration_days });
 
   // Nothing updated: tell the two reasons apart, since they need
   // different fixes. Only on this (rare) path does it cost a second query.
   const { rows: exists } = await pool.query(`SELECT expires_at FROM licenses WHERE license_key = $1`, [req.params.key]);
   if (exists.length === 0) return res.status(404).json({ error: "No license with that key." });
-  return res.status(400).json({ error: "This key never expires - there's nothing to extend. Use Change expiry to give it one." });
+  return res.status(400).json({ error: "This key never expires - there's nothing to extend. Set a duration to give it one." });
 }));
 
 app.post("/admin/licenses/:key/reset-hwid", adminLimiter, requireAdminSecret, ah(async (req, res) => {
@@ -1127,12 +1376,23 @@ app.post("/admin/licenses/bulk", adminLimiter, requireAdminSecret, ah(async (req
     // Never-expiring keys are left alone, exactly as the one-key route.
     changed = await mutateAndLog(
       req,
-      `UPDATE licenses SET expires_at = GREATEST(expires_at, now()) + make_interval(days => $2::int)
-        WHERE license_key = ANY($1::text[]) AND expires_at IS NOT NULL
+      `UPDATE licenses SET ${EXTEND_SET}
+        WHERE license_key = ANY($1::text[]) AND (expires_at IS NOT NULL OR duration_days IS NOT NULL)
        RETURNING license_key`,
       [keys, days],
       "extended",
       `+${days} days`
+    );
+  } else if (action === "set-duration") {
+    const time = durationColumns(body, "now");
+    if (time.error) return res.status(400).json({ error: time.error });
+    changed = await mutateAndLog(
+      req,
+      `UPDATE licenses SET expires_at = $2::timestamptz, duration_days = $3::int
+        WHERE license_key = ANY($1::text[]) RETURNING license_key`,
+      [keys, time.expires_at, time.duration_days],
+      "expiry_changed",
+      time.detail
     );
   } else if (action === "reset-hwid") {
     const { rows } = await pool.query(
@@ -1150,7 +1410,7 @@ app.post("/admin/licenses/bulk", adminLimiter, requireAdminSecret, ah(async (req
     );
     changed = rows.length;
   } else {
-    return res.status(400).json({ error: "action must be revoke, reactivate, extend, reset-hwid or delete." });
+    return res.status(400).json({ error: "action must be revoke, reactivate, extend, set-duration, reset-hwid or delete." });
   }
   res.json({ ok: true, requested: keys.length, changed });
 }));
@@ -1205,6 +1465,9 @@ app.use((err, _req, res, _next) => {
 // The database can still be starting when this boots (both wake from sleep
 // together), so an unreachable database gets about 30 s before giving up. A
 // bad statement isn't transient and still fails at once.
+// A stray rejection is logged, never left to take the server down.
+process.on("unhandledRejection", (e) => console.error("Unhandled rejection:", e));
+
 withDbRetry(migrate, { attempts: 8, delayMs: 1000 })
   .then(() => withDbRetry(checkVerifyStatement))
   .then(() => {

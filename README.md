@@ -41,13 +41,16 @@ instead of locking customers out.
 - **`LICENSE_SIGNING_KEY`**
   - Base64 of a 32-byte Ed25519 seed. Every "yes" from `/verify` includes a `token`
     signed with it: the key's hash, the device, the expiry, the issue time and the
-    app's one-time nonce. The app checks it with the public key compiled into
-    `license.rs`, so a fake server, a replayed answer or an edited offline stamp is
-    refused. The server won't start without it, and logs its public key at boot.
+    app's one-time nonce. Every "no" includes a `denial` signed the same way: the key's
+    hash, the device, the nonce and the reason. The app checks both with the public key
+    compiled into `license.rs`, so a fake server can neither unlock the app nor lock a
+    customer out, and a replayed answer or an edited offline stamp is refused. The server
+    won't start without it, and logs its public key at boot.
   - Changing it means releasing the app with the new public key.
 - **`ADMIN_SECRET`**
   - The real boundary. Never put it in the app, this repo or a chat.
-  - The dashboard keeps it only in that browser tab's `sessionStorage`.
+  - The dashboard keeps it in that browser tab's `sessionStorage`, or in `localStorage`
+    if "Keep me signed in" is ticked.
 
 ## Data
 
@@ -59,7 +62,8 @@ instead of locking customers out.
 | `hwid` | The PC fingerprint it's locked to; `NULL` until first activation |
 | `hw_parts` | The same PC part by part (`mg`, `vol`, `cpu`, `cores`, `host`, each an opaque hash), so a small hardware change isn't "another PC" |
 | `status` | `active` or `revoked` |
-| `expires_at` | `NULL` = never expires |
+| `expires_at` | When it stops working. `NULL` = never, unless `duration_days` is set |
+| `duration_days` | The length of time it was sold for. With `expires_at` `NULL` the key is **waiting**: its first activation sets `expires_at` to that many days later |
 | `created_at`, `last_seen_at`, `last_seen_ip` | Bookkeeping |
 
 **`license_events`**
@@ -82,33 +86,30 @@ instead of locking customers out.
   Windows install (`mg`) plus at least two more matching parts, so a renamed PC, a CPU
   swap or a new disk still works. A different PC, or a fresh Windows install, needs
   **Reset device**.
-- **Responses:** `"License activated."` with `expires_at` and the signed `token`, or a refusal message (no token)
-  (wrong device, expired, revoked, unknown).
+- **Responses:** `"License activated."` with `expires_at` and the signed `token`, or a refusal
+  message (wrong device, expired, revoked, unknown) with the signed `denial`.
 
 ## Admin dashboard
 
-Open https://afkstrikelicense.up.railway.app/ and enter `ADMIN_SECRET` once per tab. The lock icon
-clears it.
+Open https://afkstrikelicense.up.railway.app/ and sign in with `ADMIN_SECRET`. The lock icon
+signs out. The top bar's **New keys** creates 1–100 keys: pick **1d, 7d, 30d, 90d, 365d,
+Lifetime** or a custom number of days, and whether the clock starts **on first activation**
+(the default) or **right now**.
 
-- **Overview:**
-  - active/revoked bar;
-  - tiles for online now, expiring within 7 days, never used, activations and
-    wrong-device attempts in the last 24 h (each tile filters the table).
-- **Last 14 days chart:** activations, keys created and refused checks per day.
-- **Search** by key, device or IP. **Filter** by status, expiring, online or never used.
-  25 per page.
-- **Create keys:** 1–100 at once with an optional duration, plus **Copy all** and
-  **Download .txt**.
-- **Per key:**
-  - inline: Revoke / Reactivate, expiry;
-  - in the ⋯ menu: History, Extend +30 days / +1 year (keys that expire), Reset device,
-    Delete.
-- **Bulk:** tick keys (or the header box for the page), then Copy keys, Revoke,
-  Reactivate, Extend +30 days, Reset device or Delete.
-- **Activity:** recent activity across all keys. **Export CSV** of the current view.
-- **Auto-refresh** every 30 s (remembered per browser, paused while you work), with an
-  "Updated Xs ago" label.
-- **Shortcuts:** `/` search, `N` new key, `R` refresh, `Esc` close. Click any key to copy it.
+- **Overview:** a tile per count (each opens the filtered list), activity by day over 14, 30
+  or 90 days, **Needs a look** (keys another PC keeps trying, or whose device keeps being
+  reset), recent activity.
+- **Keys:** search by key, device or IP, filter, sort, 25/50/100 per page, **Export CSV**.
+  Click a key to copy it; click its row for its details: time left, first activation,
+  wrong-device tries, PCs seen, history, and every action on it.
+- **Bulk:** tick keys (or the header box for the page), then Copy, Add time, Set duration,
+  Revoke, Reactivate, Reset device or Delete.
+- **Activity:** every key's history, filtered by Activations, Refused or Admin changes, or by key.
+- **Backup & system:** download every key; restoring only adds keys that are missing, so it
+  can't undo a revoke or give back used time. Database and uptime figures, and the signing
+  public key to compare with the app's.
+- **Refresh** every 30 s, paused while you work. **Shortcuts:** `/` search, `N` new keys,
+  `R` refresh, `Esc` close.
 
 ## Admin API
 
@@ -119,11 +120,14 @@ S=https://afkstrikelicense.up.railway.app
 H="X-Admin-Secret: $ADMIN_SECRET"
 J="Content-Type: application/json"
 
-# create one key (optional expires_in_days or expires_at) / many (count 1-100)
-curl -X POST $S/admin/licenses -H "$H" -H "$J" -d '{"expires_in_days":30}'
-curl -X POST $S/admin/licenses -H "$H" -H "$J" -d '{"count":25,"expires_in_days":30}'
+# create one key / many (count 1-100). duration: "30d" or "lifetime".
+# starts: "activation" (default here) or "now".
+curl -X POST $S/admin/licenses -H "$H" -H "$J" -d '{"duration":"30d"}'
+curl -X POST $S/admin/licenses -H "$H" -H "$J" -d '{"count":25,"duration":"7d","starts":"now"}'
 
-# list (limit, offset, status=active|revoked|expired|expiring|online|unused, q=key/device/ip)
+# list (limit, offset, sort=created|expires|seen, q=key/device/ip,
+# status=active|revoked|expired|expiring|online|unused|waiting|lifetime).
+# How many match in all is in the X-Total-Count header.
 curl -H "$H" "$S/admin/licenses?limit=50&status=online&q=203.0.113"
 
 # stats / per-day activity (days 7-90, UTC) / CSV export (same filters as list)
@@ -136,22 +140,31 @@ curl -X POST   $S/admin/licenses/$K/revoke     -H "$H"
 curl -X POST   $S/admin/licenses/$K/unrevoke   -H "$H"   # back to active
 curl -X POST   $S/admin/licenses/$K/reset-hwid -H "$H"   # let it activate on a new PC
 curl -X POST   $S/admin/licenses/$K/extend     -H "$H" -H "$J" -d '{"days":30}'
-curl -X POST   $S/admin/licenses/$K/expiry     -H "$H" -H "$J" -d '{"expires_in_days":30}'  # or {"expires_at":null}
+curl -X POST   $S/admin/licenses/$K/expiry     -H "$H" -H "$J" -d '{"duration":"90d"}'  # starts defaults to "now" here
+curl           $S/admin/licenses/$K            -H "$H"   # the row plus its history's totals
 curl           $S/admin/licenses/$K/events     -H "$H"
 curl -X DELETE $S/admin/licenses/$K            -H "$H"
 
-# recent activity, all keys
+# recent activity, all keys (type=activations|refused|admin, key=..., before=<id> for older)
 curl -H "$H" "$S/admin/events?limit=50"
 
-# many keys at once (up to 200): revoke | reactivate | extend (+days) | reset-hwid | delete
+# keys worth a look / server figures
+curl -H "$H" $S/admin/attention
+curl -H "$H" $S/admin/system
+
+# backup, and restore (adds missing keys only)
+curl -H "$H" $S/admin/backup.json -o backup.json
+curl -X POST $S/admin/restore -H "$H" -H "$J" --data-binary @backup.json
+
+# many keys at once (up to 200): revoke | reactivate | extend (+days) | set-duration | reset-hwid | delete
 curl -X POST $S/admin/licenses/bulk -H "$H" -H "$J" \
   -d '{"action":"extend","days":30,"keys":["AFK-AAAA-BBBB-CCCC"]}'
 ```
 
 **Details:**
 
-- **Extend** adds days to the current expiry, or to today if the key has lapsed. It
-  refuses never-expiring keys.
+- **Extend** adds days to the current expiry, or to today if the key has lapsed. A waiting
+  key gets a longer duration. It refuses never-expiring keys.
 - **Bulk** replies `{ok, requested, changed}`. Keys already in the target state are
   skipped.
 - **CSV** cells that start with `= + - @` are prefixed with `'` (formula-injection guard).
@@ -162,19 +175,23 @@ curl -X POST $S/admin/licenses/bulk -H "$H" -H "$J" \
   `X-Forwarded-For` is only a fallback for local runs: on Railway a caller can set it to
   anything. This is only right while nothing sits in front of Railway: put Cloudflare or
   another proxy in front and every customer behind it would share one rate-limit bucket.
-- **Rate limits:** `/verify` 30/min/IP, `/admin/*` 60/min/IP. They're in-process; if this
-  is ever scaled past one replica, move them to a shared store such as Redis.
-- **Requests:** 4 kb body limit; key and hwid length caps.
+- **Rate limits:** `/verify` 30/min/IP, `/admin/*` 300/min/IP, and 10 wrong admin secrets per
+  5 min/IP lock that address out. They're in-process; if this is ever scaled past one
+  replica, move them to a shared store such as Redis.
+- **Requests:** body limits of 4 kb, 64 kb for `/admin/*` and 8 mb for `/admin/restore`; key
+  and hwid length caps.
 - **Responses:** `X-Frame-Options: DENY`, `nosniff`, `no-referrer` and gzip.
-- **Caching:** `latest.json` is `no-store`; installers get long immutable caching.
+- **Caching:** `latest.json`, `/verify` and `/admin/*` are `no-store`; installers get long
+  immutable caching.
 - **Database:** bounded pool with timeouts.
 - **Shutdown:** SIGTERM drains in-flight requests on redeploy.
 
 ## Testing
 
 `test/run-tests.js` starts the real `server.js` against a real Postgres and drives it over
-HTTP. It covers device binding, the bind race, same-PC-after-a-change matching, the key format, expiry
-and extend, bulk actions, history, stats and daily stats, export, rate limits and gzip.
+HTTP. It covers device binding, the bind race, same-PC-after-a-change matching, the key format,
+durations, signed refusals, expiry and extend, bulk actions, history, key details, backup and
+restore, stats and daily stats, export, rate limits, the admin lockout and gzip.
 **Run it before every push. It must end with 0 failures.**
 
 ```bash

@@ -298,6 +298,112 @@ async function main() {
     br = await admin("POST", "/admin/licenses/bulk", { action: "delete", keys: [made[3]] });
     check("bulk delete keeps history", br.body.changed === 1 && (await admin("GET", `/admin/licenses/${made[3]}/events`)).body[0].event === "deleted");
 
+    section("Durations");
+    {
+      const P2 = "b".repeat(32);
+      const c = (await admin("POST", "/admin/licenses", { duration: "30d" })).body;
+      check("a 30d key waits: no expiry until it's used", c.expires_at === null && c.duration_days === 30, c);
+      check("...is listed as waiting", (await admin("GET", "/admin/licenses?status=waiting")).body.some((r) => r.license_key === c.license_key));
+      const v1 = await verify(c.license_key, P2, { nonce: "c".repeat(32) });
+      const tk1 = readToken(v1.body.token);
+      check("first activation starts the clock, 30 days out", v1.body.success && Math.abs((new Date(tk1.exp) - Date.now()) / 864e5 - 30) < 0.01, tk1);
+      const stamped = (await sql("SELECT expires_at FROM licenses WHERE license_key = $1", [c.license_key]))[0].expires_at;
+      await verify(c.license_key, P2);
+      await admin("POST", `/admin/licenses/${c.license_key}/reset-hwid`);
+      await verify(c.license_key, "e".repeat(32));
+      check("later checks and a device reset don't restart it", +(await sql("SELECT expires_at FROM licenses WHERE license_key = $1", [c.license_key]))[0].expires_at === +stamped);
+      for (const [text, days] of [["1d", 1], ["7d", 7], ["90d", 90], ["365d", 365], ["12", 12]]) {
+        check(`duration ${text}`, (await admin("POST", "/admin/licenses", { duration: text })).body.duration_days === days);
+      }
+      const life = (await admin("POST", "/admin/licenses", { duration: "lifetime" })).body;
+      check("lifetime has no clock at all", life.expires_at === null && life.duration_days === null, life);
+      check("...and is listed as lifetime", (await admin("GET", "/admin/licenses?status=lifetime")).body.some((r) => r.license_key === life.license_key));
+      const now = (await admin("POST", "/admin/licenses", { duration: "7d", starts: "now" })).body;
+      check("starts: now counts from creation", Math.abs((new Date(now.expires_at) - Date.now()) / 864e5 - 7) < 0.01, now);
+      for (const bad of ["0d", "9999d", "abc", "-5", "1.5d"]) {
+        check(`bad duration ${bad} refused`, (await admin("POST", "/admin/licenses", { duration: bad })).status === 400);
+      }
+      check("bad starts refused", (await admin("POST", "/admin/licenses", { duration: "7d", starts: "later" })).status === 400);
+      const w = (await admin("POST", "/admin/licenses", { duration: "30d" })).body.license_key;
+      const we = await admin("POST", `/admin/licenses/${w}/extend`, { days: 7 });
+      check("extending a waiting key lengthens its duration", we.body.duration_days === 37 && we.body.expires_at === null, we.body);
+      const set = await admin("POST", `/admin/licenses/${w}/expiry`, { duration: "90d" });
+      check("setting a duration counts from now by default", Math.abs((new Date(set.body.expires_at) - Date.now()) / 864e5 - 90) < 0.01, set.body);
+      const back = await admin("POST", `/admin/licenses/${w}/expiry`, { duration: "lifetime" });
+      check("a key can be made lifetime", back.body.expires_at === null && back.body.duration_days === null, back.body);
+      const bk = (await admin("POST", "/admin/licenses", { count: 3, duration: "7d" })).body.created.map((r) => r.license_key);
+      const bs = await admin("POST", "/admin/licenses/bulk", { action: "set-duration", duration: "30d", starts: "activation", keys: bk });
+      check("bulk set-duration", bs.body.changed === 3 && (await admin("GET", `/admin/licenses/${bk[0]}`)).body.duration_days === 30, bs.body);
+      const be = await admin("POST", "/admin/licenses/bulk", { action: "extend", days: 5, keys: bk });
+      check("bulk extend reaches waiting keys", be.body.changed === 3 && (await admin("GET", `/admin/licenses/${bk[1]}`)).body.duration_days === 35, be.body);
+      const big = Array.from({ length: 200 }, (_, i) => `AFK-AAAA-BBBB-${String(i).padStart(4, "Z")}`);
+      check("a full 200-key bulk request fits the body limit", (await admin("POST", "/admin/licenses/bulk", { action: "revoke", keys: big })).status === 200);
+    }
+
+    section("Signed refusals");
+    {
+      const nonce = "d".repeat(32);
+      const dk = (await admin("POST", "/admin/licenses", {})).body.license_key;
+      await verify(dk, "pc-one");
+      const read = (t) => readToken(t);
+      const wrong = await verify(dk, "pc-two", { nonce });
+      const d = read(wrong.body.denial);
+      check("a refusal is signed", wrong.body.success === false && !!d, wrong.body);
+      check("...as v2, naming the key, device, nonce and message", d && d.v === 2 && d.deny === true && d.hwid === "pc-two" && d.nonce === nonce && d.msg === wrong.body.message && d.kh === crypto.createHash("sha256").update(dk).digest("hex"), d);
+      const unknown = read((await verify("AFK-ZZZZ-ZZZZ-ZZZZ", "pc", { nonce })).body.denial);
+      check("unknown and malformed keys are signed refusals too", unknown && unknown.msg === "Invalid license key." && read((await verify("nope", "pc", { nonce })).body.denial).v === 2);
+      check("without a nonce there is no denial", !(await verify(dk, "pc-two")).body.denial);
+      check("a yes never carries a denial", !(await verify(dk, "pc-one", { nonce })).body.denial);
+    }
+
+    section("Key details, attention, events, system, backup");
+    {
+      const dk = (await admin("POST", "/admin/licenses", { duration: "30d" })).body.license_key;
+      await verify(dk, "real-pc");
+      for (const pc of ["x1", "x2", "x3"]) await verify(dk, pc);
+      const det = (await admin("GET", `/admin/licenses/${dk}`)).body;
+      check("details: wrong-device tries and first activation", det.wrong_device_tries === 3 && !!det.first_activated_at && det.devices_seen >= 3, det);
+      check("details: unknown key -> 404", (await admin("GET", "/admin/licenses/AFK-ZZZZ-ZZZZ-ZZZZ")).status === 404);
+      const att = (await admin("GET", "/admin/attention")).body.find((a) => a.license_key === dk);
+      check("attention flags repeated wrong-device tries", att && att.wrong_device_tries === 3 && att.other_devices === 3, att);
+      const list = await admin("GET", "/admin/licenses?limit=2&sort=expires");
+      check("list reports the total matching in a header", Number(list.headers.get("x-total-count")) > 2 && list.body.length === 2);
+      check("list rows don't leak the total column", !("total_matching" in list.body[0]));
+      check("sort=seen works", (await admin("GET", "/admin/licenses?limit=1&sort=seen")).status === 200);
+      check("a junk sort falls back safely", (await admin("GET", `/admin/licenses?sort=${encodeURIComponent("1;DROP TABLE licenses")}`)).status === 200);
+      const refused = (await admin("GET", "/admin/events?type=refused&limit=5")).body;
+      check("events: type filter", refused.length > 0 && refused.every((e) => e.event.startsWith("rejected")));
+      const page2 = (await admin("GET", `/admin/events?limit=5&before=${refused[refused.length - 1].id}&type=refused`)).body;
+      check("events: before pages back", page2.every((e) => e.id < refused[refused.length - 1].id));
+      check("events: key search", (await admin("GET", `/admin/events?key=${dk}`)).body.every((e) => e.license_key === dk));
+      const sys = (await admin("GET", "/admin/system")).body;
+      check("system report", sys.licenses > 0 && sys.database_ms >= 0 && /^[0-9a-f]{64}$/.test(sys.signing_public_key), sys);
+      const bak = await admin("GET", "/admin/backup.json");
+      check("backup holds every key", bak.body.format === "afkstrike-licenses" && bak.body.licenses.length === (await sql("SELECT count(*)::int AS n FROM licenses"))[0].n);
+      const one = bak.body.licenses.find((l) => l.license_key === dk);
+      await admin("DELETE", `/admin/licenses/${dk}`);
+      const r1 = await admin("POST", "/admin/restore", { format: "afkstrike-licenses", licenses: [one, { license_key: "bad" }] });
+      check("restore adds a missing key and counts the invalid one", r1.body.added === 1 && r1.body.invalid === 1, r1.body);
+      check("...with its time and device intact", (await verify(dk, "real-pc")).body.success === true);
+      await admin("POST", `/admin/licenses/${dk}/revoke`);
+      const r2 = await admin("POST", "/admin/restore", { format: "afkstrike-licenses", licenses: [one] });
+      check("restore never changes an existing key", r2.body.added === 0 && r2.body.already_here === 1 && (await verify(dk, "real-pc")).body.success === false, r2.body);
+      check("restore refuses other files", (await admin("POST", "/admin/restore", { hello: 1 })).status === 400);
+    }
+
+    section("Admin lockout");
+    {
+      const ip = "203.0.113.77";
+      const tryWith = async (secret) => (await fetch(BASE + "/admin/stats", { headers: { "x-admin-secret": secret, "x-forwarded-for": ip } })).status;
+      const codes = [];
+      for (let i = 0; i < 12; i++) codes.push(await tryWith("wrong"));
+      check("10 wrong secrets, then locked out", codes.filter((c) => c === 401).length === 10 && codes.filter((c) => c === 429).length === 2, codes);
+      check("the right secret still works from there", (await tryWith(ADMIN)) === 200);
+      let ok = 0;
+      for (let i = 0; i < 100; i++) if ((await fetch(BASE + "/admin/stats", { headers: { "x-admin-secret": ADMIN, "x-forwarded-for": "203.0.113.78" } })).status === 200) ok++;
+      check("a busy dashboard isn't throttled at 100 requests a minute", ok === 100, ok);
+    }
+
     section("Activity by day");
     const daily = (await admin("GET", "/admin/stats/daily?days=14")).body;
     check("14 days, oldest first, today last", Array.isArray(daily) && daily.length === 14 && daily[13].day === new Date().toISOString().slice(0, 10), daily.slice(-2));

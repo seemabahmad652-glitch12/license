@@ -1,1148 +1,608 @@
 <!doctype html>
-<!--
-  AfkStrike license admin dashboard - a single self-contained static
-  page (no bundler, no framework, matches the desktop app's own "plain
-  HTML/CSS/JS" style) served by server.js at the server's root URL.
-
-  It carries no secret of its own: the Admin Secret is typed in once by
-  whoever opens this page, kept only in this tab's sessionStorage (gone
-  on tab close, never sent anywhere but this server), and attached as
-  the X-Admin-Secret header on every API call below - exactly what
-  README.md's curl examples already do by hand. This page is just a
-  friendlier way to drive the same /admin/* routes documented there.
-
-  Nothing here is sensitive to serve statically: without the real
-  secret every API call just gets a 401, same as a guess over curl.
--->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>AfkStrike license admin</title>
 <link rel="icon" href="logo.png" />
-<title>AfkStrike - License Admin</title>
+<!--
+  The license server's admin dashboard: one self-contained page with no build
+  step and nothing external. It carries no secret. The admin secret is typed in
+  and sent only as a header on calls to this same server.
+-->
 <style>
   :root {
-    /* Real surface colours rather than the previous stack of
-       translucent whites over a gradient - layering rgba(255,255,255,
-       0.04) three deep made every panel edge a slightly different
-       muddy grey depending on what was behind it. */
-    /* The desktop app's own black-and-white palette, so the dashboard
-       and the app read as one product. */
     --bg: #0c0c0c;
-    --surface: #161616;
-    --surface-2: #1d1d1d;
-    --surface-3: #282828;
-    --line: #2d2d2d;
-    --line-soft: #262626;
-
+    --card: rgba(22, 22, 22, 0.92);
+    --card-2: #1a1a1a;
+    --input: #121212;
+    --control: #1d1d1d;
+    --control-2: #282828;
+    --border: #2d2d2d;
+    --border-2: #464646;
+    --line: #262626;
     --text: #ffffff;
     --dim: #bdbdbd;
     --faint: #858585;
-
     --accent: #ffffff;
-    --accent-2: #e5e5e5;
-    --accent-3: #ffffff;
-    --accent-soft: rgba(255, 255, 255, 0.08);
-    --accent-line: rgba(255, 255, 255, 0.22);
-
+    --accent-ink: #0a0a0a;
     --ok: #34e0c0;
-    --ok-soft: rgba(52, 224, 192, 0.13);
     --warn: #f5b544;
-    --warn-soft: rgba(245, 181, 68, 0.13);
-    --bad: #ff6b6b;
-    --bad-soft: rgba(255, 107, 107, 0.13);
-    /* Expiry is a lapse, not a punishment - it reads grey rather than
-       red so it is visually distinct from a revoked key at a glance. */
-    --lapsed: #8b8398;
-    --lapsed-soft: rgba(139, 131, 152, 0.15);
-
-    --r-lg: 20px;
-    --r-md: 14px;
-    --r-sm: 10px;
-    --ease: cubic-bezier(0.16, 1, 0.3, 1);
-
-    font-family: -apple-system, "Segoe UI", Inter, Roboto, system-ui, sans-serif;
-
-    /* The actual fix for the white dropdown. A native <select>'s popup
-       list is drawn by the OS, not the page, so no amount of CSS on the
-       element itself affects it - it stayed light-on-white over this
-       dark page. `color-scheme: dark` is what tells the browser to draw
-       its built-in widgets (that popup, scrollbars, focus rings, date
-       pickers) in their dark variants. Set at the root so every control
-       on the page inherits it. */
-    color-scheme: dark;
+    --bad: #ff5c6c;
+    --radius: 14px;
+    --radius-s: 10px;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
   }
-
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
+  html, body { margin: 0; min-height: 100%; }
   body {
-    background:
-      radial-gradient(1100px 600px at 12% -15%, rgba(255, 255, 255, 0.13), transparent 62%),
-      radial-gradient(800px 500px at 108% 4%, rgba(255, 255, 255, 0.07), transparent 58%),
-      var(--bg);
-    color: var(--text);
-    min-height: 100%;
-    -webkit-font-smoothing: antialiased;
-    font-size: 14px;
-    line-height: 1.5;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-variant-numeric: tabular-nums;
   }
-
-  a { color: var(--accent); }
-  code { font-family: "SF Mono", ui-monospace, Consolas, monospace; font-size: 0.92em; }
-
-  /* Every figure and timestamp on this page sits in a column that gets
-     scanned vertically, so proportional digits make them visibly ragged.
-     Tabular figures line them up. */
-  .tnum { font-variant-numeric: tabular-nums; }
-
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-  button {
-    font-family: inherit; cursor: pointer; border: none; border-radius: var(--r-md);
-    transition: transform 0.12s var(--ease), background-color 0.15s var(--ease),
-                border-color 0.15s var(--ease), color 0.15s var(--ease), opacity 0.15s;
-  }
-  button:active { transform: scale(0.98); }
-  button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
-
-  input, select, textarea {
-    font-family: inherit; font-size: 13.5px; color: var(--text);
-    background: var(--surface-2); border: 1px solid var(--line);
-    border-radius: var(--r-md); padding: 11px 13px;
-  }
-  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
-  input::placeholder { color: var(--faint); }
-
-  .btn-primary {
-    width: 100%; padding: 12px; background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: white; font-weight: 600; font-size: 14px;
-  }
-  .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
-  .btn-ghost {
-    padding: 11px 15px; background: var(--surface-2); border: 1px solid var(--line);
-    color: var(--text); font-size: 13.5px; font-weight: 500;
-    display: inline-flex; align-items: center; gap: 7px;
-  }
-  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-3); }
-  .btn-accent {
-    padding: 11px 17px; background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: white; font-size: 13.5px; font-weight: 600;
-    display: inline-flex; align-items: center; gap: 7px;
-  }
-  .btn-accent:hover:not(:disabled) { filter: brightness(1.08); }
-
+  button, input, select { font: inherit; color: inherit; }
+  h1, h2, h3, p { margin: 0; }
   .hidden { display: none !important; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .mono { font-family: var(--mono); }
+  .faint { color: var(--faint); }
+  .dim { color: var(--dim); }
+  .spacer { flex: 1; }
 
-  /* ---------- Secret-entry gate ---------- */
-  #gate {
-    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: rgba(8, 8, 8, 0.92); backdrop-filter: blur(8px); z-index: 50; padding: 20px;
-  }
-  #gate {
-    background:
-      radial-gradient(900px 500px at 50% -10%, rgba(255, 255, 255, 0.22), transparent 60%),
-      rgba(8, 8, 8, 0.96);
-  }
-  .gate-card {
-    width: min(420px, 100%); padding: 30px 30px 24px; border-radius: var(--r-lg);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 40%), var(--surface);
-    border: 1px solid var(--line);
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
-    margin: 0;
-  }
-  .gate-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
-  .gate-head .gate-mark { margin-bottom: 0; flex: none; }
-  .gate-host { color: var(--dim); font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
-  .gate-lead { color: var(--dim); font-size: 13px; line-height: 1.5; margin: 0 0 18px; }
-  .gate-lead code { color: var(--text); background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
-  .gate-label { display: block; font-size: 12px; font-weight: 600; color: var(--dim); margin-bottom: 6px; }
-  .gate-field { position: relative; margin-bottom: 12px; }
-  .gate-field input { width: 100%; padding-right: 44px; margin: 0; font-family: ui-monospace, Consolas, monospace; }
-  .gate-eye {
-    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-    width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px;
-    background: transparent; border: 0; color: var(--dim); cursor: pointer;
-  }
-  .gate-eye:hover, .gate-eye[aria-pressed="true"] { color: var(--text); background: var(--accent-soft); }
-  .gate-remember { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); cursor: pointer; margin-bottom: 10px; user-select: none; }
-  .gate-remember input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
-  .gate-submit { width: 100%; justify-content: center; display: inline-flex; align-items: center; gap: 8px; min-height: 40px; }
-  .gate-spinner {
-    display: none; width: 14px; height: 14px; border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.35); border-top-color: #fff; animation: gate-spin 0.7s linear infinite;
-  }
-  .gate-card.is-busy .gate-spinner { display: inline-block; }
-  .gate-card.is-busy .gate-submit { opacity: 0.85; cursor: progress; }
-  @keyframes gate-spin { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .gate-spinner { animation-duration: 2s; } }
-  .gate-foot { color: var(--dim); font-size: 11.5px; margin: 14px 0 0; text-align: center; opacity: 0.8; }
-  .gate-card.shake { animation: gate-shake 0.32s ease; }
-  @keyframes gate-shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
-  .visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; padding: 0; }
-  /* Both marks hold the real app icon (public/logo.png - the same
-     artwork the Windows build ships as its .ico) rather than a letter
-     on a gradient. The gradient fill is dropped because the logo
-     carries its own; the rounded corner stays so it matches the
-     surrounding cards. */
-  .gate-mark, .brand-mark { overflow: hidden; }
-  .gate-mark img, .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
-  .gate-mark {
-    width: 40px; height: 40px; border-radius: var(--r-sm);
-    margin-bottom: 16px;
-  }
-  .gate-card h1 { font-size: 19px; margin: 0 0 6px; letter-spacing: -0.01em; }
-  .gate-card p { color: var(--dim); font-size: 13px; margin: 0 0 20px; max-width: 46ch; }
-  .gate-error { color: var(--bad); font-size: 13px; min-height: 18px; margin-bottom: 8px; line-height: 1.4; }
-
-  /* ---------- Shell ---------- */
-  #app { max-width: 1200px; margin: 0 auto; padding: 30px 24px 70px; }
-  .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; }
-  .brand { display: flex; align-items: center; gap: 12px; }
-  .brand-mark {
-    width: 38px; height: 38px; border-radius: 12px;
-  }
-  .brand-text h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
-  .brand-text span { font-size: 12.5px; color: var(--faint); }
-  .topbar-actions { display: flex; gap: 8px; align-items: center; }
-  .host-pill {
-    font-size: 12px; color: var(--dim); background: var(--surface-2); border: 1px solid var(--line);
-    padding: 7px 12px; border-radius: 999px; max-width: 240px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .icon-btn {
-    width: 38px; height: 38px; display: grid; place-items: center; background: var(--surface-2);
-    border: 1px solid var(--line); color: var(--dim); font-size: 15px;
-  }
-  .icon-btn:hover { color: var(--text); border-color: var(--accent); }
-
-  /* ---------- Overview panel ----------
-     One panel showing the key population as parts of a whole, rather
-     than a row of identical floating cards: these counts are shares of
-     one number, and a segmented bar says that in a way five separate
-     tiles cannot. */
-  .overview {
-    border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--surface);
-    padding: 20px 22px; margin-bottom: 20px;
-  }
-  .overview-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-  .overview-head h2 { font-size: 14.5px; margin: 0; font-weight: 600; }
-  .overview-total { font-size: 13px; color: var(--dim); }
-  .overview-total b { color: var(--text); font-weight: 600; }
-
-  .meter { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: var(--surface-3); }
-  .meter span { display: block; transition: width 0.4s var(--ease); min-width: 0; }
-  .meter .seg-active { background: var(--ok); }
-  .meter .seg-revoked { background: var(--warn); }
-
-  .legend { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 15px; }
-  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
-  .legend-item .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-  .legend-item b { color: var(--text); font-weight: 600; }
-  .dot-active { background: var(--ok); }
-  .dot-revoked { background: var(--warn); }
-  .dot-expired { background: var(--lapsed); }
-  .dot-bound { background: var(--accent); }
-
-  /* ---------- Toolbar ---------- */
-  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
-  .search-wrap { position: relative; flex: 1; min-width: 200px; }
-  .search-wrap input { width: 100%; padding-left: 38px; }
-  .search-wrap svg { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); opacity: 0.45; pointer-events: none; }
-
-  /* `appearance: none` strips the OS control chrome so the closed
-     select matches the inputs beside it; the chevron is drawn here
-     instead. The popup list itself is handled by `color-scheme` at the
-     root (see the note there) - these option rules are a belt-and-
-     braces fallback for browsers that style options from CSS. */
-  select {
-    appearance: none; -webkit-appearance: none;
-    padding-right: 36px; cursor: pointer;
-    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23bdbdbd' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 13px center;
-  }
-  select:hover { border-color: var(--accent); }
-  select option { background: var(--surface-2); color: var(--text); }
-
-  /* ---------- Table ---------- */
-  /* overflow-x: auto rather than hidden - at phone widths the row
-     actions and the Expires column were simply clipped off the right
-     edge with no way to reach them, which made the table read-only on
-     a phone. Scrolling keeps every column reachable, and an auto
-     scroll container still clips the rounded corners. */
-  .table-wrap {
-    border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--surface);
-    overflow-x: auto; overflow-y: hidden;
-  }
-  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 540px; }
-  /* Sentence case, not the tracked-out uppercase these were - uppercase
-     micro-labels are harder to read and were the loudest thing on a
-     page whose actual content is the rows. */
-  thead th {
-    text-align: left; font-size: 12px; color: var(--faint); font-weight: 500;
-    padding: 13px 16px; border-bottom: 1px solid var(--line);
-  }
-  tbody td { padding: 13px 16px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
-  tbody tr:last-child td { border-bottom: none; }
-  tbody tr { transition: background-color 0.15s; }
-  tbody tr:hover { background: rgba(255, 255, 255, 0.022); }
-
-  .key-chip {
-    font-family: "SF Mono", ui-monospace, Consolas, monospace; font-size: 12.5px;
-    background: var(--surface-2); padding: 5px 9px; border-radius: var(--r-sm);
-    cursor: pointer; border: 1px solid var(--line); white-space: nowrap;
-  }
-  .key-chip:hover { border-color: var(--accent); color: var(--text); }
-  .hwid-cell { font-size: 12.5px; color: var(--faint); }
-  .hwid-cell.bound { color: var(--dim); font-family: "SF Mono", ui-monospace, Consolas, monospace; font-size: 12px; }
-  .ts-cell { color: var(--faint); font-size: 12.5px; white-space: nowrap; }
-  .exp-cell { font-size: 12.5px; white-space: nowrap; color: var(--dim); }
-  .exp-cell.never { color: var(--faint); }
-  .exp-cell.soon { color: var(--warn); }
-  .exp-cell.gone { color: var(--lapsed); }
-
-  .pill {
-    display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
-    padding: 5px 11px; border-radius: 999px; white-space: nowrap;
-  }
-  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
-  .pill-active { color: var(--ok); background: var(--ok-soft); }
-  .pill-revoked { color: var(--warn); background: var(--warn-soft); }
-  .pill-expired { color: var(--lapsed); background: var(--lapsed-soft); }
-
-  .status-cell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-  th.col-status, td.col-status { min-width: 158px; }
-
-  /* Two inline actions and an overflow menu, rather than five buttons
-     in a row: five wrapped onto a second line at this width, which
-     made row heights ragged and put Delete directly under the cursor's
-     resting position. The rare and destructive ones now live one
-     deliberate click away. */
-  .row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: nowrap; }
-  .row-actions button {
-    font-size: 12px; padding: 7px 11px; border-radius: var(--r-sm); background: var(--surface-2);
-    border: 1px solid var(--line); color: var(--dim); font-weight: 500; white-space: nowrap;
-  }
-  .row-actions button:hover:not(:disabled) { color: var(--text); border-color: var(--accent); background: var(--surface-3); }
-  .row-more { width: 32px; padding: 7px 0 !important; display: grid; place-items: center; line-height: 1; }
-
-  .menu {
-    position: fixed; z-index: 70; min-width: 164px; padding: 6px;
-    background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md);
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; gap: 2px;
-  }
-  .menu button {
-    text-align: left; background: none; border: none; color: var(--dim);
-    font-size: 13px; padding: 9px 11px; border-radius: var(--r-sm); width: 100%;
-  }
-  .menu button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
-  .menu button.danger { color: #e8899a; }
-  .menu button.danger:hover:not(:disabled) { background: var(--bad-soft); color: var(--bad); }
-  .menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
-
-  .empty-state, .loading-state { padding: 56px 20px; text-align: center; color: var(--faint); }
-  .empty-state b { display: block; color: var(--dim); font-weight: 600; margin-bottom: 4px; }
-
-  .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 13px; color: var(--dim); }
-  .pagination .controls { display: flex; gap: 8px; }
-
-  /* ---------- Modals ---------- */
-  .modal-overlay {
-    position: fixed; inset: 0; background: rgba(6, 6, 6, 0.74); backdrop-filter: blur(6px);
-    display: flex; align-items: center; justify-content: center; z-index: 40; padding: 20px;
-    animation: fade-in 0.15s var(--ease);
-  }
-  .modal-card {
-    width: min(450px, 100%); padding: 26px; border-radius: var(--r-lg);
-    background: var(--surface); border: 1px solid var(--line);
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
-  }
-  .modal-card h2 { font-size: 16.5px; margin: 0 0 6px; letter-spacing: -0.01em; }
-  .modal-card .sub { font-size: 13px; color: var(--dim); margin: 0 0 20px; }
-  .field-label { font-size: 13px; color: var(--dim); display: block; margin-bottom: 9px; }
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
-
-  /* Duration picker: preset chips plus an optional exact date, so the
-     common cases (a month, a year, forever) are one click and the
-     uncommon one is still reachable. */
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
-  .chip {
-    padding: 8px 13px; border-radius: 999px; font-size: 13px; font-weight: 500;
-    background: var(--surface-2); border: 1px solid var(--line); color: var(--dim);
-  }
-  .chip:hover { border-color: var(--accent); color: var(--text); }
-  .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
-  .exact-wrap { margin-top: 14px; }
-  .exact-hint { font-size: 12.5px; color: var(--faint); margin: 0 0 7px; }
-  .exact-wrap input { width: 100%; }
-  .expiry-preview { margin-top: 12px; font-size: 13px; color: var(--dim); min-height: 20px; }
-  .expiry-preview b { color: var(--text); font-weight: 600; }
-
-  .new-key-result {
-    margin-top: 18px; padding: 15px; border-radius: var(--r-md); background: var(--accent-soft);
-    border: 1px solid var(--accent-line);
-  }
-  .new-key-result .rk { font-size: 12.5px; color: var(--dim); margin-bottom: 9px; }
-  .new-key-result .key-chip { font-size: 14px; letter-spacing: 0.02em; }
-
-  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-
-  /* ---------- Toasts ---------- */
-  #toasts { position: fixed; bottom: 22px; right: 22px; display: flex; flex-direction: column; gap: 9px; z-index: 60; }
-  .toast {
-    padding: 12px 17px; border-radius: var(--r-md); font-size: 13.5px; font-weight: 500; color: white;
-    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); animation: toast-in 0.2s var(--ease); max-width: 330px;
-  }
-  .toast.ok { background: #0f766e; }
-  .toast.err { background: #b91c1c; }
-  @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-  @media (max-width: 860px) {
-    th.col-device, td.col-device { display: none; }
-  }
-  @media (max-width: 680px) {
-    #app { padding: 22px 16px 60px; }
-    th.col-seen, td.col-seen { display: none; }
-    .row-actions { justify-content: flex-start; }
-    /* The key chip is the widest thing in the row and was pushing the
-       status, expiry and actions out of the initial scroll position -
-       tightened here so the useful columns are visible without having
-       to discover that the table scrolls. */
-    table { min-width: 0; }
-    tbody td, thead th { padding: 11px 10px; }
-    .key-chip { font-size: 11px; padding: 4px 7px; }
-    th.col-status, td.col-status { min-width: 0; }
-    .row-actions button { font-size: 11px; padding: 6px 8px; }
-  }
-
-
-  /* ---------- Health tiles, chart, activity ---------- */
-  /* Health tiles under the population bar: things you act on (who's
-     running right now, whose key lapses this week) rather than shares
-     of the total, which is why they're separate from the bar above. */
-  .tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line-soft); }
-  .tile {
-    padding: 12px 14px; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line);
-    text-align: left; color: inherit; font: inherit; cursor: pointer;
-  }
-  .tile:hover { border-color: var(--accent-line); }
-  .tile .tl { font-size: 11.5px; color: var(--faint); display: flex; align-items: center; gap: 6px; }
-  .tile .tv { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; margin-top: 3px; }
-  .tile .tv.ok { color: var(--ok); }
-  .tile .tv.warn { color: var(--warn); }
-  .tile .tv.bad { color: var(--bad); }
-  .tile .tv.accent { color: var(--accent-3); }
-  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 rgba(52, 224, 192, 0.6); animation: pulse 2s infinite; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-  @media (max-width: 860px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-
-  /* Quantity field in the create modal */
-  .qty-row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
-  .qty-row input { width: 92px; text-align: center; }
-  .qty-row .qty-hint { font-size: 12.5px; color: var(--faint); }
-
-  /* Several created keys at once */
-  .key-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; margin: 4px 0 10px; }
-  .key-list .key-chip { display: block; text-align: center; }
-  .result-actions { display: flex; gap: 8px; }
-  .result-actions button { flex: 1; justify-content: center; }
-
-  /* Per-key history + the global feed share one timeline look */
-  .timeline { display: flex; flex-direction: column; max-height: 420px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
-  .ev { display: grid; grid-template-columns: 10px 1fr auto; gap: 12px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
-  .ev:last-child { border-bottom: none; }
-  .ev-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--faint); }
-  .ev-dot.ok { background: var(--ok); }
-  .ev-dot.warn { background: var(--warn); }
-  .ev-dot.bad { background: var(--bad); }
-  .ev-dot.accent { background: var(--accent); }
-  .ev-title { font-size: 13px; color: var(--text); font-weight: 500; }
-  .ev-meta { font-size: 12px; color: var(--faint); margin-top: 2px; word-break: break-all; }
-  .ev-meta .key-chip { font-size: 11px; padding: 2px 6px; }
-  .ev-time { font-size: 12px; color: var(--faint); white-space: nowrap; }
-  .modal-card.wide { width: min(560px, 100%); }
-
-  .feed {
-    margin-top: 22px; border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--surface);
-    padding: 18px 22px;
-  }
-  .feed-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-  .feed-head h2 { font-size: 14.5px; margin: 0; font-weight: 600; }
-  .feed .timeline { max-height: 360px; }
-  .muted-line { color: var(--faint); font-size: 13px; padding: 14px 0; }
-
-  /* ---------- Activity chart ---------- */
-  .chart-card {
-    border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--surface);
-    padding: 18px 22px 14px; margin-bottom: 20px;
-  }
-  .chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
-  .chart-head h2 { font-size: 14.5px; margin: 0; font-weight: 600; }
-  .chart-sum { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--dim); }
-  .chart-sum b { color: var(--text); font-weight: 600; }
-  .chart-sum i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
-  .chart-sum .k-act i { background: var(--ok); }
-  .chart-sum .k-new i { background: var(--accent); }
-  .chart-sum .k-rej i { background: var(--bad); }
-  .chart { display: grid; grid-template-columns: repeat(var(--n, 14), minmax(0, 1fr)); gap: 6px; align-items: end; height: 120px; }
-  .chart-day { position: relative; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; gap: 2px; cursor: default; }
-  .chart-bars { display: flex; align-items: flex-end; justify-content: center; gap: 2px; width: 100%; height: calc(100% - 18px); }
-  .chart-bars span { width: min(10px, 32%); border-radius: 3px 3px 1px 1px; min-height: 2px; transition: height 0.4s var(--ease); }
-  .chart-bars .b-act { background: var(--ok); }
-  .chart-bars .b-new { background: var(--accent); opacity: 0.85; }
-  .chart-bars .b-rej { background: var(--bad); opacity: 0.85; }
-  .chart-bars span.zero { opacity: 0.18; }
-  .chart-day:hover .chart-bars span { filter: brightness(1.25); }
-  .chart-lbl { font-size: 10.5px; color: var(--faint); white-space: nowrap; }
-  .chart-day.today .chart-lbl { color: var(--text); font-weight: 600; }
-
-  /* ---------- Selection + bulk bar ---------- */
-  .sel-col { width: 36px; padding-right: 0 !important; }
-  .sel-box { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; margin: 0; vertical-align: middle; }
-  tbody tr.selected { background: rgba(255, 255, 255, 0.08); }
-  .bulk-bar {
-    position: sticky; top: 10px; z-index: 5; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    padding: 10px 14px; margin-bottom: 12px; border-radius: var(--r-lg);
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.1)); border: 1px solid rgba(255, 255, 255, 0.5);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-  }
-  .bulk-bar .bulk-count { font-size: 13px; color: var(--text); margin-right: 6px; }
-  .bulk-bar .bulk-count b { font-weight: 700; }
-  .bulk-bar button { padding: 7px 11px; font-size: 12.5px; }
-  .bulk-bar .spacer { flex: 1; }
-  .bulk-bar .danger { color: var(--bad); }
-
-  /* ---------- Auto-refresh ---------- */
-  .auto-btn {
-    display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 12px;
-    background: var(--surface-2); border: 1px solid var(--line); color: var(--dim); font-size: 12.5px;
-  }
-  .auto-btn .auto-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
-  .auto-btn.on { color: var(--text); border-color: rgba(52, 224, 192, 0.45); }
-  .auto-btn.on .auto-dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
-  .updated-ago { font-size: 12px; color: var(--faint); white-space: nowrap; }
-  .shortcuts { margin-top: 18px; text-align: center; font-size: 12px; color: var(--faint); }
-  .shortcuts kbd {
-    display: inline-block; min-width: 18px; padding: 1px 6px; margin: 0 2px; border-radius: 5px;
-    font: 600 11px/1.5 ui-monospace, monospace; color: var(--dim); background: var(--surface-2); border: 1px solid var(--line);
-  }
-  @media (max-width: 640px) { .updated-ago { display: none; } }
-
-
-  /* ---------- Black and white, like the desktop app ---------- */
-  body {
-    background:
-      radial-gradient(1100px 600px at 12% -15%, rgba(255, 255, 255, 0.05), transparent 62%),
-      var(--bg);
-  }
-  #gate { background: radial-gradient(900px 500px at 50% -10%, rgba(255, 255, 255, 0.08), transparent 60%), rgba(8, 8, 8, 0.97); }
-
-  /* Cards: a dark gradient with a light top edge, like the app's panels. */
-  .gate-card, .overview, .chart-card, .table-wrap, .feed, .modal-card {
-    position: relative;
-    background: linear-gradient(180deg, #1a1a1a 0%, #131313 100%);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 8px 24px rgba(0, 0, 0, 0.4);
-  }
-  .gate-card::before, .overview::before, .chart-card::before, .feed::before, .modal-card::before {
-    content: ""; position: absolute; left: 18px; right: 18px; top: 0; height: 1px; pointer-events: none;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
-  }
-  .gate-card { box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 60px rgba(255, 255, 255, 0.04); }
-
-  /* Headings fade white to silver. */
-  .gate-card h1, .brand-text h1 {
-    background: linear-gradient(180deg, #ffffff 30%, #bcbcbc 100%);
-    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
-  }
-
-  /* Main buttons: white with dark text and a soft glow. */
-  .btn-primary, .btn-accent {
-    background: linear-gradient(180deg, #ffffff 0%, #ececec 100%);
-    color: #0a0a0a;
-    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.08), 0 0 22px rgba(255, 255, 255, 0.14), 0 6px 18px rgba(0, 0, 0, 0.5);
-  }
-  .btn-primary:hover:not(:disabled), .btn-accent:hover:not(:disabled) {
-    filter: none; background: #ffffff;
-    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.06), 0 0 32px rgba(255, 255, 255, 0.28), 0 8px 22px rgba(0, 0, 0, 0.5);
-  }
-  .btn-accent { border-radius: 999px; }
-  .gate-submit { border-radius: 999px; }
-  .gate-spinner { border-color: rgba(0, 0, 0, 0.25); border-top-color: #0a0a0a; }
-
-  /* Other buttons: glass. */
-  .btn-ghost, .icon-btn, .auto-btn, .row-actions button, .chip, .host-pill {
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015));
-    border-color: rgba(255, 255, 255, 0.1);
-  }
-  .btn-ghost:hover:not(:disabled), .icon-btn:hover, .row-actions button:hover:not(:disabled), .chip:hover {
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03));
-    border-color: rgba(255, 255, 255, 0.24);
-  }
-  .chip.on { background: #ffffff; border-color: #ffffff; color: #0a0a0a; }
-
-  input:focus, select:focus, textarea:focus { border-color: rgba(255, 255, 255, 0.35); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08); }
-  select:hover { border-color: rgba(255, 255, 255, 0.24); }
-  .key-chip:hover { border-color: rgba(255, 255, 255, 0.3); }
-  :focus-visible { outline-color: rgba(255, 255, 255, 0.6); }
-
-  .brand-mark, .gate-mark { box-shadow: 0 0 18px rgba(255, 255, 255, 0.12); }
-  .tile { background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)); }
-  .tile:hover { border-color: rgba(255, 255, 255, 0.22); }
-  .tile .tv { text-shadow: 0 0 20px rgba(255, 255, 255, 0.1); }
-  .chart-bars .b-new { box-shadow: 0 0 8px rgba(255, 255, 255, 0.35); }
-  tbody tr:hover { background: rgba(255, 255, 255, 0.035); }
-  .bulk-bar { background: linear-gradient(90deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05)); border-color: rgba(255, 255, 255, 0.24); }
-  .toast.ok { background: #0f6e5f; }
-  * { scrollbar-color: rgba(255, 255, 255, 0.18) transparent; }
-  ::selection { background: rgba(255, 255, 255, 0.85); color: #0a0a0a; }
-
-
-  /* ---------- Ambient light, particles and card lighting ----------
-     Same as the desktop app: slow drifting lights and floating sparks
-     behind everything, sparks inside the sign-in and overview cards,
-     and a soft light on the card under the pointer. */
+  /* Soft lights and sparks behind everything. Decorative. */
   .ambient { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
-  #app, #toasts { position: relative; z-index: 1; }
-  #gate { z-index: 50; }
-  .ambient-light { position: absolute; border-radius: 50%; will-change: transform; }
-  .ambient-light.a1 { width: 900px; height: 900px; left: -260px; top: -480px; background: radial-gradient(closest-side, rgba(255, 255, 255, 0.075), transparent); animation: amb-drift-1 26s ease-in-out infinite alternate; }
-  .ambient-light.a2 { width: 720px; height: 720px; right: -260px; top: 160px; background: radial-gradient(closest-side, rgba(52, 224, 192, 0.06), transparent); animation: amb-drift-2 32s ease-in-out infinite alternate; }
-  .ambient-light.a3 { width: 820px; height: 820px; left: 22%; bottom: -560px; background: radial-gradient(closest-side, rgba(255, 255, 255, 0.05), transparent); animation: amb-drift-3 38s ease-in-out infinite alternate; }
-  @keyframes amb-drift-1 { to { transform: translate(140px, 90px) scale(1.15); } }
-  @keyframes amb-drift-2 { to { transform: translate(-160px, -70px) scale(1.2); } }
-  @keyframes amb-drift-3 { to { transform: translate(-120px, -110px) scale(1.1); } }
-  .ambient-particle {
-    position: absolute; border-radius: 50%; background: #ffffff; opacity: 0;
-    box-shadow: 0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(255, 255, 255, 0.35);
-    will-change: transform, opacity;
-    animation-name: amb-spark; animation-timing-function: linear; animation-iteration-count: infinite;
-  }
-  .ambient-particle.is-teal { background: #34e0c0; box-shadow: 0 0 6px rgba(52, 224, 192, 0.9), 0 0 14px rgba(52, 224, 192, 0.35); }
-  @keyframes amb-spark { 0% { transform: translateY(30px); opacity: 0; } 50% { opacity: 0.95; } 100% { transform: translateY(-90px); opacity: 0; } }
-  .fx-paused .ambient-light, .fx-paused .ambient-particle, .fx-paused .card-spark, .fx-paused .live-dot { animation-play-state: paused; }
+  .ambient i { position: absolute; border-radius: 50%; }
+  .ambient .a1 { width: 900px; height: 900px; left: -260px; top: -480px; background: radial-gradient(closest-side, rgba(255,255,255,.07), transparent); }
+  .ambient .a2 { width: 720px; height: 720px; right: -260px; top: 120px; background: radial-gradient(closest-side, rgba(52,224,192,.05), transparent); }
+  .spark { position: absolute; top: 100%; border-radius: 50%; background: #fff; box-shadow: 0 0 6px rgba(255,255,255,.9); will-change: transform; }
+  .spark.teal { background: var(--ok); box-shadow: 0 0 6px rgba(52,224,192,.9); }
+  #gate, #app, .drawer, .overlay, #toasts { position: relative; z-index: 1; }
 
-  /* Cards let a little of the light through. */
-  .overview, .chart-card, .table-wrap, .feed {
-    background: linear-gradient(180deg, rgba(26, 26, 26, 0.82) 0%, rgba(19, 19, 19, 0.86) 100%);
+  /* Controls */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 0 14px;
+    border: 1px solid var(--border-2); border-radius: var(--radius-s); background: transparent; cursor: pointer;
+    font-size: 13px; font-weight: 600; white-space: nowrap;
   }
-  .overview, .gate-card { overflow: hidden; isolation: isolate; }
-  .overview {
-    background:
-      radial-gradient(460px circle at 94% -14%, rgba(255, 255, 255, 0.1), transparent 62%),
-      linear-gradient(180deg, rgba(26, 26, 26, 0.82) 0%, rgba(19, 19, 19, 0.86) 100%);
+  .btn:hover:not(:disabled) { background: var(--control-2); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn.primary:hover:not(:disabled) { background: #e4e4e4; box-shadow: 0 0 22px rgba(255,255,255,.25); }
+  .btn.danger { color: var(--bad); border-color: rgba(255,92,108,.45); }
+  .btn.danger:hover:not(:disabled) { background: rgba(255,92,108,.12); }
+  .btn.small { min-height: 30px; padding: 0 10px; font-size: 12px; }
+  .icon-btn { width: 36px; padding: 0; }
+  input[type=text], input[type=password], input[type=number], input[type=search], select {
+    min-height: 36px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--input); outline: none;
   }
-  .gate-card { background: radial-gradient(420px circle at 90% -20%, rgba(255, 255, 255, 0.1), transparent 62%), linear-gradient(180deg, #1a1a1a 0%, #131313 100%); }
-  .overview > :not(.card-spark), .gate-card > :not(.card-spark) { position: relative; z-index: 1; }
-  .card-spark {
-    position: absolute; z-index: 0; width: 4px; height: 4px; border-radius: 50%; background: #ffffff; opacity: 0; pointer-events: none;
-    box-shadow: 0 0 10px #ffffff, 0 0 20px rgba(255, 255, 255, 0.5);
-    animation: card-twinkle 3.4s ease-in-out infinite;
-  }
-  .card-spark:nth-child(3n) { width: 3px; height: 3px; }
-  .card-spark:nth-child(4n) { background: #34e0c0; box-shadow: 0 0 10px #34e0c0, 0 0 20px rgba(52, 224, 192, 0.5); }
-  @keyframes card-twinkle { 0%, 100% { opacity: 0; transform: scale(0.4); } 45% { opacity: 1; transform: scale(1.3); } }
+  input:focus, select:focus { border-color: var(--border-2); box-shadow: 0 0 0 3px rgba(255,255,255,.08); }
+  .btn:focus-visible, .chip:focus-visible, .tab:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  select option { background: #1a1a1a; }
 
-  /* Pointer light on the card under the mouse (--mx / --my set below). */
-  .lit { position: relative; }
-  .lit::after {
-    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 0;
-    opacity: 0; transition: opacity 0.25s var(--ease);
-    background: radial-gradient(380px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.08), transparent 45%);
-  }
-  .lit:hover::after { opacity: 1; }
-  .tile.lit::after { background: radial-gradient(200px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.1), transparent 55%); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; min-width: 0; }
+  .card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .card-head h2 { font-size: 15px; font-weight: 650; }
+  .card-head .sub { font-size: 12.5px; color: var(--faint); }
 
-  /* Main buttons breathe a little. */
-  .btn-accent:not(:disabled), .gate-submit:not(:disabled) { animation: none; }
-  /* With motion turned off in the OS, the sparks stay as faint still dots. */
-  @media (prefers-reduced-motion: reduce) {
-    .ambient-light, .ambient-particle, .card-spark, .btn-accent, .gate-submit { animation: none; }
-    .ambient-particle, .card-spark { opacity: 0.35; }
-  }
-  @keyframes btn-glow {
-    0%, 100% { box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.08), 0 0 18px rgba(255, 255, 255, 0.12), 0 6px 18px rgba(0, 0, 0, 0.5); }
-    50% { box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.08), 0 0 34px rgba(255, 255, 255, 0.3), 0 6px 18px rgba(0, 0, 0, 0.5); }
-  }
+  /* Sign-in */
+  #gate { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+  .gate-card { width: min(420px, 100%); background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 26px; box-shadow: 0 0 60px rgba(255,255,255,.06); }
+  .gate-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .gate-head img { width: 42px; height: 42px; border-radius: 11px; display: block; }
+  .gate-head h1 { font-size: 17px; }
+  .gate-head span { font-size: 12px; color: var(--faint); }
+  .gate-lead { color: var(--dim); font-size: 13px; margin-bottom: 16px; }
+  .gate-lead code { font-family: var(--mono); font-size: 12px; }
+  .field-label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 6px; font-weight: 600; }
+  .gate-field { position: relative; }
+  .gate-field input { width: 100%; padding-right: 44px; }
+  .gate-eye { position: absolute; right: 4px; top: 4px; width: 28px; height: 28px; border: 0; background: none; cursor: pointer; color: var(--faint); }
+  .gate-remember { display: flex; gap: 8px; align-items: center; margin: 12px 0; font-size: 13px; color: var(--dim); }
+  .gate-error { min-height: 18px; font-size: 12.5px; color: var(--bad); margin-bottom: 8px; }
+  .gate-card .btn.primary { width: 100%; }
 
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  /* Frame */
+  .top {
+    position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 16px; padding: 10px 20px;
+    background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; }
+  .brand img { width: 30px; height: 30px; border-radius: 8px; display: block; }
+  .tabs { display: flex; gap: 2px; }
+  .tab { min-height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: none; color: var(--dim); cursor: pointer; font-size: 13px; font-weight: 600; }
+  .tab:hover { color: #fff; background: var(--control); }
+  .tab.on { color: #fff; background: var(--control-2); }
+  .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  #updatedAgo { font-size: 12px; color: var(--faint); white-space: nowrap; }
+  #offlineBanner { padding: 8px 20px; background: rgba(245,181,68,.12); border-bottom: 1px solid rgba(245,181,68,.3); color: var(--warn); font-size: 13px; }
+  main { max-width: 1240px; margin: 0 auto; padding: 18px 20px 40px; display: flex; flex-direction: column; gap: 14px; }
+
+  /* Overview */
+  .tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+  .tile { text-align: left; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); cursor: pointer; min-width: 0; }
+  .tile:hover:not(:disabled) { border-color: var(--border-2); }
+  .tile:disabled { cursor: default; color: inherit; }
+  .tile .l { display: block; font-size: 12px; color: var(--faint); font-weight: 600; margin-bottom: 4px; }
+  .tile .v { display: block; font-size: 25px; font-weight: 700; line-height: 1.15; }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+  .chart { display: flex; align-items: flex-end; gap: 4px; height: 130px; }
+  .chart-day { flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; justify-content: center; gap: 1px; border-radius: 4px; }
+  .chart-day:hover { background: rgba(255,255,255,.05); }
+  .chart-day span { flex: 1; max-width: 9px; min-height: 2px; border-radius: 2px 2px 0 0; background: var(--line); }
+  .b-act { background: var(--ok) !important; } .b-new { background: #fff !important; } .b-rej { background: var(--bad) !important; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--dim); }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; }
+  .attn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-top: 1px solid var(--line); background: none; text-align: left; cursor: pointer; border-radius: 6px; }
+  .attn:hover { background: var(--control); }
+
+  /* Keys */
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .toolbar input[type=search] { flex: 1 1 240px; min-width: 0; }
+  .bulk { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border-2); border-radius: var(--radius); background: var(--card-2); flex-wrap: wrap; }
+  .table-card { padding: 0; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; padding: 11px 12px; font-size: 12px; font-weight: 600; color: var(--faint); border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td { background: rgba(255,255,255,.03); }
+  tr.sel td { background: rgba(255,255,255,.06); }
+  .key { font-family: var(--mono); font-size: 12.5px; font-weight: 600; padding: 3px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--input); cursor: copy; }
+  .key:hover { border-color: var(--border-2); }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; border: 1px solid var(--border-2); color: var(--dim); }
+  .pill.ok { color: var(--ok); border-color: rgba(52,224,192,.4); background: rgba(52,224,192,.08); }
+  .pill.warn { color: var(--warn); border-color: rgba(245,181,68,.4); background: rgba(245,181,68,.08); }
+  .pill.bad { color: var(--bad); border-color: rgba(255,92,108,.4); background: rgba(255,92,108,.08); }
+  .t-soon { color: var(--warn); } .t-gone { color: var(--bad); }
+  .empty { padding: 38px 16px; text-align: center; color: var(--faint); }
+  .empty b { display: block; color: var(--dim); margin-bottom: 4px; }
+  .pager { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); flex-wrap: wrap; }
+
+  /* Timeline */
+  .ev { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); align-items: start; }
+  .ev:first-child { border-top: 0; }
+  .ev-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--faint); }
+  .ev-dot.ok { background: var(--ok); } .ev-dot.warn { background: var(--warn); } .ev-dot.bad { background: var(--bad); } .ev-dot.accent { background: #fff; }
+  .ev-title { font-size: 13px; font-weight: 600; }
+  .ev-meta { font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
+  .ev-time { font-size: 12px; color: var(--faint); white-space: nowrap; }
+
+  /* Duration picker */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { min-height: 34px; min-width: 52px; padding: 0 12px; border: 1px solid var(--border-2); border-radius: 9px; background: none; cursor: pointer; font-size: 13px; font-weight: 600; }
+  .chip:hover { background: var(--control-2); }
+  .chip.on { background: #fff; border-color: #fff; color: var(--accent-ink); }
+  .custom-days { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); }
+  .custom-days input { width: 84px; }
+  .custom-days.on input { border-color: #fff; }
+  .picker-note { margin-top: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; font-size: 13px; color: var(--dim); }
+  .picker-note b { color: #fff; }
+  .seg { display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--border); border-radius: 10px; background: var(--input); flex-wrap: wrap; }
+  .seg button { min-height: 28px; padding: 0 11px; border: 0; border-radius: 7px; background: none; color: var(--dim); cursor: pointer; font-size: 12.5px; font-weight: 600; }
+  .seg button.on { background: var(--control-2); color: #fff; }
+  .form-row { margin-top: 14px; }
+
+  /* Overlays */
+  .overlay { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.72); overflow-y: auto; }
+  .modal { width: min(520px, 100%); background: #171717; border: 1px solid var(--border-2); border-radius: 16px; padding: 22px; }
+  .modal h2 { font-size: 17px; margin-bottom: 4px; }
+  .modal .lead { font-size: 13px; color: var(--dim); overflow-wrap: anywhere; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+  .result { margin-top: 14px; padding: 12px; border: 1px solid var(--border-2); border-radius: 10px; }
+  .result-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 180px; overflow-y: auto; margin: 8px 0; }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 15; width: min(480px, 100%); padding: 20px; overflow-y: auto;
+    background: #151515; border-left: 1px solid var(--border-2); box-shadow: -20px 0 60px rgba(0,0,0,.6);
+  }
+  .drawer-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .facts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin: 14px 0; }
+  .facts .k { display: block; font-size: 11.5px; color: var(--faint); font-weight: 600; }
+  .facts .val { font-size: 13px; overflow-wrap: anywhere; }
+  .section-title { margin: 18px 0 8px; font-size: 12px; font-weight: 700; color: var(--faint); letter-spacing: .4px; text-transform: uppercase; }
+  .action-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  #toasts { position: fixed; z-index: 40; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 32px); }
+  .toast { display: flex; gap: 12px; align-items: center; padding: 10px 14px; border-radius: 10px; background: #fff; color: var(--accent-ink); font-size: 13px; font-weight: 600; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+  .toast.err { background: var(--bad); color: #fff; }
+  .toast button { border: 0; background: none; color: inherit; cursor: pointer; text-decoration: underline; font-weight: 700; padding: 0; }
+  .sys { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .sys .k { display: block; font-size: 11.5px; color: var(--faint); font-weight: 600; }
+  .sys .val { overflow-wrap: anywhere; font-size: 13px; }
+  .kbd-help { text-align: center; font-size: 12px; color: var(--faint); }
+  kbd { padding: 1px 6px; border: 1px solid var(--border-2); border-radius: 5px; font: 11px var(--mono); }
+
+  @media (max-width: 900px) {
+    .two { grid-template-columns: minmax(0, 1fr); }
+    .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .col-device { display: none; }
+  }
+  @media (max-width: 640px) {
+    .top { padding: 10px 12px; gap: 8px; }
+    main { padding: 12px 12px 30px; }
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .tile .v { font-size: 21px; }
+    .col-seen, .col-status, .col-manage { display: none; }
+    th, td { padding-left: 8px; padding-right: 8px; }
+    .col-time { white-space: normal; }
+    .brand span { display: none; }
+    .tab { padding: 0 9px; font-size: 12.5px; }
+    #updatedAgo { display: none; }
+    .kbd-help { display: none; }
   }
 </style>
 </head>
 <body>
-  <!-- Drifting lights and floating sparks behind the page, like the
-       desktop app. Decorative only. -->
-  <div class="ambient" aria-hidden="true">
-    <div class="ambient-light a1"></div>
-    <div class="ambient-light a2"></div>
-    <div class="ambient-light a3"></div>
-    <div id="ambientParticles"></div>
-  </div>
+  <div class="ambient" aria-hidden="true"><i class="a1"></i><i class="a2"></i><div id="sparks"></div></div>
 
   <div id="gate">
     <form class="gate-card" id="gateForm" novalidate>
       <div class="gate-head">
-        <div class="gate-mark"><img src="logo.png" alt="" /></div>
-        <div>
-          <h1>AfkStrike license admin</h1>
-          <span class="gate-host" id="gateHost"></span>
-        </div>
+        <img src="logo.png" alt="" />
+        <div><h1>AfkStrike license admin</h1><span id="gateHost"></span></div>
       </div>
       <p class="gate-lead">Sign in with the server's admin secret (Railway &rsaquo; license-server &rsaquo; Variables &rsaquo; <code>ADMIN_SECRET</code>).</p>
-      <!-- A username field (hidden) lets the browser's password manager
-           save and fill the secret like any other login. -->
       <input type="text" name="username" value="admin" autocomplete="username" class="visually-hidden" tabindex="-1" aria-hidden="true" />
-      <label class="gate-label" for="gateSecretInput">Admin secret</label>
+      <label class="field-label" for="gateSecretInput">Admin secret</label>
       <div class="gate-field">
         <input type="password" id="gateSecretInput" name="password" autocomplete="current-password" spellcheck="false" placeholder="Paste the secret" />
-        <button type="button" class="gate-eye" id="gateEye" title="Show the secret" aria-label="Show the secret" aria-pressed="false">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        </button>
+        <button type="button" class="gate-eye" id="gateEye" title="Show the secret" aria-label="Show the secret" aria-pressed="false">&#128065;</button>
       </div>
-      <label class="gate-remember">
-        <input type="checkbox" id="gateRemember" />
-        <span>Keep me signed in on this browser</span>
-      </label>
+      <label class="gate-remember"><input type="checkbox" id="gateRemember" /><span>Keep me signed in on this browser</span></label>
       <div class="gate-error" id="gateError" role="alert"></div>
-      <button type="submit" class="btn-primary gate-submit" id="gateSubmit">
-        <span class="gate-spinner" aria-hidden="true"></span>
-        <span id="gateSubmitLabel">Sign in</span>
-      </button>
-      <p class="gate-foot">The secret is only ever sent to this server, as a request header.</p>
+      <button type="submit" class="btn primary" id="gateSubmit">Sign in</button>
     </form>
   </div>
 
   <div id="app" class="hidden">
-    <div class="topbar">
-      <div class="brand">
-        <div class="brand-mark"><img src="logo.png" alt="" /></div>
-        <div class="brand-text">
-          <h1>License admin</h1>
-          <span>AfkStrike</span>
+    <header class="top">
+      <div class="brand"><img src="logo.png" alt="" /><span>License admin</span></div>
+      <nav class="tabs" aria-label="Sections">
+        <button type="button" class="tab" data-view="overview">Overview</button>
+        <button type="button" class="tab" data-view="keys">Keys</button>
+        <button type="button" class="tab" data-view="activity">Activity</button>
+        <button type="button" class="tab" data-view="tools">Backup &amp; system</button>
+      </nav>
+      <div class="top-right">
+        <span id="updatedAgo"></span>
+        <button type="button" class="btn small primary" id="newKeyBtn">New keys</button>
+        <button type="button" class="btn small icon-btn" id="refreshBtn" title="Refresh (R)" aria-label="Refresh">&#8635;</button>
+        <button type="button" class="btn small icon-btn" id="lockBtn" title="Sign out" aria-label="Sign out">&#128274;</button>
+      </div>
+    </header>
+    <div id="offlineBanner" class="hidden" role="status"></div>
+
+    <main>
+      <!-- Overview -->
+      <section id="view-overview" class="view">
+        <div class="tiles" id="tiles"></div>
+        <div class="two" style="margin-top:14px">
+          <div class="card">
+            <div class="card-head">
+              <h2>Activity by day</h2>
+              <span class="spacer"></span>
+              <div class="seg" id="chartRange">
+                <button type="button" data-days="14" class="on">14d</button>
+                <button type="button" data-days="30">30d</button>
+                <button type="button" data-days="90">90d</button>
+              </div>
+            </div>
+            <div class="chart" id="chart" aria-label="Activity per day"></div>
+            <div class="legend" id="chartSum" style="margin-top:12px"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Needs a look</h2><span class="sub">possible shared keys</span></div>
+            <div id="attention"></div>
+          </div>
         </div>
-      </div>
-      <div class="topbar-actions">
-        <span class="updated-ago" id="updatedAgo"></span>
-        <button type="button" class="auto-btn" id="autoBtn" title="Refresh everything every 30 seconds" aria-pressed="false"><span class="auto-dot"></span>Auto-refresh</button>
-        <span class="host-pill" id="hostPill"></span>
-        <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
-        </button>
-        <button class="icon-btn" id="lockBtn" title="Lock" aria-label="Lock">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
-        </button>
-      </div>
-    </div>
+        <div class="card" style="margin-top:14px">
+          <div class="card-head">
+            <h2>Recent activity</h2>
+            <span class="spacer"></span>
+            <button type="button" class="btn small" id="allActivityBtn">View all</button>
+          </div>
+          <div id="recent"></div>
+        </div>
+      </section>
 
-    <div class="overview">
-      <div class="overview-head">
-        <h2>Key overview</h2>
-        <div class="overview-total"><b class="tnum" id="statTotal">-</b> keys in total</div>
-      </div>
-      <div class="meter" id="meter" aria-hidden="true">
-        <span class="seg-active" id="segActive" style="width:0%"></span>
-        <span class="seg-revoked" id="segRevoked" style="width:0%"></span>
-      </div>
-      <div class="legend">
-        <div class="legend-item"><span class="dot dot-active"></span><b class="tnum" id="statActive">-</b> active</div>
-        <div class="legend-item"><span class="dot dot-revoked"></span><b class="tnum" id="statRevoked">-</b> revoked</div>
-        <div class="legend-item"><span class="dot dot-expired"></span><b class="tnum" id="statExpired">-</b> expired</div>
-        <div class="legend-item"><span class="dot dot-bound"></span><b class="tnum" id="statBound">-</b> bound to a device</div>
-      </div>
-      <!-- Each tile is also a shortcut to that filter on the table. -->
-      <div class="tiles">
-        <button type="button" class="tile" data-filter="online" title="Checked in within the last 10 minutes">
-          <span class="tl"><span class="live-dot"></span>Online now</span>
-          <div class="tv ok tnum" id="statOnline">-</div>
-        </button>
-        <button type="button" class="tile" data-filter="expiring" title="Active keys that expire within 7 days">
-          <span class="tl">Expiring &le; 7 days</span>
-          <div class="tv warn tnum" id="statExpiring">-</div>
-        </button>
-        <button type="button" class="tile" data-filter="unused" title="Never activated on any device">
-          <span class="tl">Never used</span>
-          <div class="tv tnum" id="statUnused">-</div>
-        </button>
-        <button type="button" class="tile" data-filter="" title="First activations in the last 24 hours">
-          <span class="tl">Activations &middot; 24h</span>
-          <div class="tv accent tnum" id="statActivations">-</div>
-        </button>
-        <button type="button" class="tile" data-filter="" title="Attempts to use a key on a second device, last 24 hours">
-          <span class="tl">Wrong-device tries &middot; 24h</span>
-          <div class="tv bad tnum" id="statRejections">-</div>
-        </button>
-      </div>
-    </div>
+      <!-- Keys -->
+      <section id="view-keys" class="view hidden">
+        <div class="toolbar">
+          <input type="search" id="searchInput" placeholder="Search key, device or IP   ( / )" aria-label="Search keys" />
+          <select id="statusFilter" aria-label="Filter">
+            <option value="">All keys</option>
+            <option value="active">Active</option>
+            <option value="online">Online now</option>
+            <option value="waiting">Waiting for first use</option>
+            <option value="expiring">Expiring within 7 days</option>
+            <option value="expired">Expired</option>
+            <option value="lifetime">Lifetime</option>
+            <option value="unused">Never used</option>
+            <option value="revoked">Revoked</option>
+          </select>
+          <select id="sortSelect" aria-label="Sort">
+            <option value="created">Newest first</option>
+            <option value="expires">Expiring first</option>
+            <option value="seen">Last seen first</option>
+          </select>
+          <button type="button" class="btn" id="exportBtn" title="Download this list as a spreadsheet">Export CSV</button>
+        </div>
 
-    <div class="chart-card">
-      <div class="chart-head">
-        <h2>Last 14 days</h2>
-        <div class="chart-sum" id="chartSum"></div>
-      </div>
-      <div class="chart" id="chart" aria-label="Activity per day"></div>
-    </div>
+        <div class="bulk hidden" id="bulkBar" role="toolbar" aria-label="Selected keys" style="margin-top:10px">
+          <b id="bulkCount">0</b><span class="dim">selected</span>
+          <button type="button" class="btn small" data-bulk="copy">Copy</button>
+          <button type="button" class="btn small" data-bulk="extend">Add time</button>
+          <button type="button" class="btn small" data-bulk="set">Set duration</button>
+          <button type="button" class="btn small" data-bulk="revoke">Revoke</button>
+          <button type="button" class="btn small" data-bulk="reactivate">Reactivate</button>
+          <button type="button" class="btn small" data-bulk="reset-hwid">Reset device</button>
+          <button type="button" class="btn small danger" data-bulk="delete">Delete</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn small" data-bulk="clear">Clear</button>
+        </div>
 
-    <div class="toolbar">
-      <div class="search-wrap">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-        <input type="text" id="searchInput" placeholder="Search key, device or IP   ( / )" />
-      </div>
-      <select id="statusFilter" aria-label="Filter by status">
-        <option value="">All keys</option>
-        <option value="active">Active</option>
-        <option value="revoked">Revoked</option>
-        <option value="expired">Expired</option>
-        <option value="expiring">Expiring soon</option>
-        <option value="online">Online now</option>
-        <option value="unused">Never used</option>
-      </select>
-      <button class="btn-ghost" id="refreshBtn2">Refresh</button>
-      <button class="btn-ghost" id="exportBtn" title="Download what's currently shown as CSV">Export CSV</button>
-      <button class="btn-accent" id="newKeyBtn">New key</button>
-    </div>
+        <div class="card table-card" style="margin-top:10px">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:34px"><input type="checkbox" id="selectAll" aria-label="Select all on this page" /></th>
+                <th>Key</th>
+                <th class="col-status">Status</th>
+                <th class="col-time">Time left</th>
+                <th class="col-device">Device</th>
+                <th class="col-seen">Last seen</th>
+                <th class="col-manage"></th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <div class="empty hidden" id="emptyState"></div>
+        </div>
+        <div class="pager" style="margin-top:10px">
+          <span id="pageInfo"></span>
+          <span class="spacer"></span>
+          <label>Per page
+            <select id="pageSize" aria-label="Keys per page"><option>25</option><option>50</option><option>100</option></select>
+          </label>
+          <button type="button" class="btn small" id="prevPageBtn">Previous</button>
+          <button type="button" class="btn small" id="nextPageBtn">Next</button>
+        </div>
+      </section>
 
-    <div class="bulk-bar hidden" id="bulkBar" role="toolbar" aria-label="Selected keys">
-      <span class="bulk-count"><b id="bulkCount">0</b> selected</span>
-      <button type="button" class="btn-ghost" data-bulk="copy">Copy keys</button>
-      <button type="button" class="btn-ghost" data-bulk="revoke">Revoke</button>
-      <button type="button" class="btn-ghost" data-bulk="reactivate">Reactivate</button>
-      <button type="button" class="btn-ghost" data-bulk="extend-30">Extend +30 days</button>
-      <button type="button" class="btn-ghost" data-bulk="reset-hwid">Reset device</button>
-      <button type="button" class="btn-ghost danger" data-bulk="delete">Delete</button>
-      <span class="spacer"></span>
-      <button type="button" class="btn-ghost" data-bulk="clear">Clear</button>
-    </div>
+      <!-- Activity -->
+      <section id="view-activity" class="view hidden">
+        <div class="card">
+          <div class="card-head">
+            <h2>Activity</h2>
+            <div class="seg" id="activityType">
+              <button type="button" data-type="" class="on">All</button>
+              <button type="button" data-type="activations">Activations</button>
+              <button type="button" data-type="refused">Refused</button>
+              <button type="button" data-type="admin">Admin changes</button>
+            </div>
+            <span class="spacer"></span>
+            <input type="search" id="activityKey" placeholder="Filter by key" aria-label="Filter activity by key" />
+          </div>
+          <div id="activityList"></div>
+          <div style="text-align:center;margin-top:12px"><button type="button" class="btn small hidden" id="activityMore">Load more</button></div>
+        </div>
+      </section>
 
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th class="sel-col"><input type="checkbox" class="sel-box" id="selectAll" title="Select every key on this page" aria-label="Select all on this page" /></th>
-            <th>Key</th>
-            <th class="col-status">Status</th>
-            <th class="col-device">Device</th>
-            <th>Expires</th>
-            <th class="col-seen">Last seen</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="rows"></tbody>
-      </table>
-      <div class="loading-state hidden" id="loadingState">Loading&hellip;</div>
-      <div class="empty-state hidden" id="emptyState"></div>
-    </div>
+      <!-- Backup & system -->
+      <section id="view-tools" class="view hidden">
+        <div class="two">
+          <div class="card">
+            <div class="card-head"><h2>Backup</h2></div>
+            <p class="dim" style="font-size:13px;margin-bottom:12px">Download every key with its device and time. Restoring only adds keys that are missing, so it can't undo a revoke or give back used time.</p>
+            <div class="action-row">
+              <button type="button" class="btn primary" id="backupBtn">Download backup</button>
+              <button type="button" class="btn" id="restoreBtn">Restore from a file</button>
+              <input type="file" id="restoreFile" accept=".json,application/json" class="hidden" />
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Server</h2><span class="spacer"></span><button type="button" class="btn small" id="systemRefresh">Check</button></div>
+            <div class="sys" id="system"></div>
+          </div>
+        </div>
+      </section>
 
-    <div class="pagination">
-      <span class="tnum" id="pageInfo"></span>
-      <div class="controls">
-        <button class="btn-ghost" id="prevPageBtn">Previous</button>
-        <button class="btn-ghost" id="nextPageBtn">Next</button>
-      </div>
-    </div>
-
-    <div class="feed">
-      <div class="feed-head">
-        <h2>Recent activity</h2>
-        <span class="tnum" style="font-size:12.5px;color:var(--faint)">activations, rejections and admin changes</span>
-      </div>
-      <div class="timeline" id="feed"></div>
-    </div>
-    <div class="shortcuts"><kbd>/</kbd> search &nbsp; <kbd>N</kbd> new key &nbsp; <kbd>R</kbd> refresh &nbsp; <kbd>Esc</kbd> close</div>
+      <div class="kbd-help"><kbd>/</kbd> search &nbsp; <kbd>N</kbd> new keys &nbsp; <kbd>R</kbd> refresh &nbsp; <kbd>Esc</kbd> close</div>
+    </main>
   </div>
 
-  <div class="modal-overlay hidden" id="newKeyModal">
-    <div class="modal-card">
-      <h2>Create keys</h2>
-      <p class="sub">Each key binds to the first device that activates it.</p>
-      <span class="field-label">How many</span>
-      <div class="qty-row">
-        <input type="number" id="newKeyCount" min="1" max="100" value="1" class="tnum" aria-label="Number of keys" />
-        <span class="qty-hint">Up to 100 at once &mdash; handy for stocking a shop.</span>
+  <!-- Key details -->
+  <aside class="drawer hidden" id="drawer" aria-label="Key details">
+    <div class="drawer-head">
+      <span class="key" id="drawerKey" title="Click to copy"></span>
+      <span class="spacer"></span>
+      <button type="button" class="btn small icon-btn" id="drawerClose" aria-label="Close">&times;</button>
+    </div>
+    <div id="drawerBody"></div>
+  </aside>
+
+  <!-- Create keys -->
+  <div class="overlay hidden" id="newKeyModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="newKeyTitle">
+      <h2 id="newKeyTitle">Create keys</h2>
+      <p class="lead">Each key locks to the first PC that activates it.</p>
+      <div class="form-row">
+        <span class="field-label">How long</span>
+        <div id="newKeyPicker"></div>
       </div>
-      <span class="field-label">Valid for</span>
-      <div class="chips" id="newKeyChips"></div>
-      <div class="exact-wrap">
-        <p class="exact-hint">or pick an exact date</p>
-        <input type="date" id="newKeyExactDate" aria-label="Exact expiry date" />
+      <div class="form-row">
+        <label class="field-label" for="newKeyCount">How many (1 to 100)</label>
+        <input type="number" id="newKeyCount" min="1" max="100" value="1" style="width:110px" />
       </div>
-      <div class="expiry-preview" id="newKeyPreview"></div>
       <div id="newKeyResult"></div>
       <div class="modal-actions">
-        <button class="btn-ghost" id="newKeyCancel">Close</button>
-        <button class="btn-accent" id="newKeyCreate">Create</button>
+        <button type="button" class="btn" id="newKeyClose">Close</button>
+        <button type="button" class="btn primary" id="newKeyCreate">Create</button>
       </div>
     </div>
   </div>
 
-  <div class="modal-overlay hidden" id="expiryModal">
-    <div class="modal-card">
-      <h2>Change expiry</h2>
-      <p class="sub" id="expiryModalSub"></p>
-      <span class="field-label">Valid for</span>
-      <div class="chips" id="expiryChips"></div>
-      <div class="exact-wrap">
-        <p class="exact-hint">or pick an exact date</p>
-        <input type="date" id="expiryExactDate" aria-label="Exact expiry date" />
-      </div>
-      <div class="expiry-preview" id="expiryPreview"></div>
+  <!-- Set a duration / add time -->
+  <div class="overlay hidden" id="timeModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="timeTitle">
+      <h2 id="timeTitle"></h2>
+      <p class="lead" id="timeLead"></p>
+      <div class="form-row" id="timePicker"></div>
       <div class="modal-actions">
-        <button class="btn-ghost" id="expiryCancel">Cancel</button>
-        <button class="btn-accent" id="expirySave">Save expiry</button>
+        <button type="button" class="btn" id="timeCancel">Cancel</button>
+        <button type="button" class="btn primary" id="timeSave">Save</button>
       </div>
     </div>
   </div>
 
-  <div class="modal-overlay hidden" id="historyModal">
-    <div class="modal-card wide">
-      <h2>Key history</h2>
-      <p class="sub"><span class="key-chip" id="historyKey"></span></p>
-      <div class="timeline" id="historyList"></div>
+  <!-- Confirm -->
+  <div class="overlay hidden" id="confirmModal">
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle"></h2>
+      <p class="lead" id="confirmLead"></p>
       <div class="modal-actions">
-        <button class="btn-ghost" id="historyClose">Close</button>
+        <button type="button" class="btn" id="confirmNo">Cancel</button>
+        <button type="button" class="btn" id="confirmYes"></button>
       </div>
     </div>
   </div>
 
-  <div id="toasts"></div>
+  <div id="toasts" aria-live="polite"></div>
 
 <script>
 "use strict";
 
-// ---------- Tiny API client ----------
-// Same origin as this page (the license server itself), so no base
-// URL to configure - this dashboard only ever exists alongside the
-// server it manages.
-const SECRET_KEY = "afkstrike_admin_secret";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-// This tab only (sessionStorage) by default; "Keep me signed in" puts it
-// in localStorage for this browser instead. The lock button clears both.
+// ---------- Secret ----------
+// This tab only, unless "Keep me signed in" is ticked. Signing out clears both.
+const SECRET_KEY = "afkstrike_admin_secret";
 function getSecret() {
   try { return sessionStorage.getItem(SECRET_KEY) || localStorage.getItem(SECRET_KEY) || ""; } catch { return ""; }
 }
-function setSecret(value, remember = false) {
+function setSecret(value, remember) {
   try {
     sessionStorage.setItem(SECRET_KEY, value);
     if (remember) localStorage.setItem(SECRET_KEY, value);
-  } catch { /* private window etc. */ }
+  } catch { /* private window */ }
 }
 function clearSecret() {
   try { sessionStorage.removeItem(SECRET_KEY); } catch { /* ignore */ }
   try { localStorage.removeItem(SECRET_KEY); } catch { /* ignore */ }
 }
 
-// One request with a time limit, so a stuck connection can't leave the page
-// waiting forever. Long enough for the server to wake from sleep.
-const API_TIMEOUT_MS = 30000;
-async function apiFetch(path, options) {
-  try {
-    return await fetch(path, { ...options, signal: AbortSignal.timeout(API_TIMEOUT_MS) });
-  } catch (e) {
-    if (e && e.name === "TimeoutError") throw new Error("Failed to fetch: the server took too long to answer.");
-    throw e;
-  }
-}
+// ---------- API ----------
+// Reads are tried again while the server wakes or redeploys. Changes never are:
+// the first try may have worked.
+const TIMEOUT_MS = 30000;
+const READ_RETRY_MS = [1000, 3000];
 
-// Reads are tried again while the server wakes or redeploys. Changes are
-// never repeated automatically: the first try may have worked.
-const API_READ_RETRY_MS = [1000, 3000];
-async function apiWithRetry(path, options) {
+async function request(path, options = {}) {
   const isRead = !options.method || options.method === "GET";
+  const init = {
+    ...options,
+    headers: { "X-Admin-Secret": getSecret(), ...(options.body ? { "Content-Type": "application/json" } : {}) },
+  };
   for (let attempt = 0; ; attempt++) {
-    const canRetry = isRead && attempt < API_READ_RETRY_MS.length;
+    const canRetry = isRead && attempt < READ_RETRY_MS.length;
     try {
-      const res = await apiFetch(path, options);
-      if (!canRetry || ![502, 503, 504].includes(res.status)) return res;
+      const res = await fetch(path, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
+      if (!canRetry || ![502, 503, 504].includes(res.status)) {
+        setOffline(false);
+        return res;
+      }
     } catch (e) {
-      if (!canRetry) throw e;
+      if (!canRetry) {
+        setOffline(true);
+        throw new Error(e && e.name === "TimeoutError" ? "The server took too long to answer." : "Couldn't reach the server.");
+      }
     }
-    await new Promise((r) => setTimeout(r, API_READ_RETRY_MS[attempt]));
+    await new Promise((r) => setTimeout(r, READ_RETRY_MS[attempt]));
   }
 }
 
-async function api(path, options = {}) {
-  const res = await apiWithRetry(path, {
-    ...options,
-    headers: {
-      "X-Admin-Secret": getSecret(),
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers || {}),
-    },
-  });
+async function readError(res) {
+  try {
+    const body = await res.json();
+    return body.message || body.error || `Request failed (${res.status}).`;
+  } catch {
+    return `Request failed (${res.status}).`;
+  }
+}
+
+async function checked(path, options) {
+  const res = await request(path, options);
   if (res.status === 401) {
     showGate("That secret isn't right. Copy ADMIN_SECRET again from Railway's Variables tab.");
     throw new Error("unauthorized");
   }
-  if (!res.ok) {
-    let message = `Request failed (${res.status}).`;
-    try {
-      const body = await res.json();
-      if (body && body.error) message = body.error;
-      if (body && body.message) message = body.message;
-    } catch { /* non-JSON error body - keep the generic message */ }
-    throw new Error(message);
-  }
-  if (res.status === 204) return null;
-  return res.json();
+  if (!res.ok) throw new Error(await readError(res));
+  return res;
+}
+const api = async (path, options) => (await checked(path, options)).json();
+const post = (path, body) => api(path, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) });
+const keyPath = (key) => `/admin/licenses/${encodeURIComponent(key)}`;
+
+function showError(e) {
+  if (e && e.message !== "unauthorized") toast(e.message, "err");
+}
+
+function setOffline(offline) {
+  const banner = $("offlineBanner");
+  banner.textContent = offline ? "Can't reach the server right now. What's shown may be out of date." : "";
+  banner.classList.toggle("hidden", !offline);
 }
 
 // ---------- Toasts ----------
-const toastsEl = document.getElementById("toasts");
-function toast(message, kind = "ok") {
+function toast(message, kind = "ok", undo) {
   const el = document.createElement("div");
-  el.className = `toast ${kind}`;
-  el.textContent = message;
-  toastsEl.appendChild(el);
-  setTimeout(() => el.remove(), 3200);
-}
-
-// ---------- Gate (secret entry) ----------
-const gateEl = document.getElementById("gate");
-const appEl = document.getElementById("app");
-const gateSecretInput = document.getElementById("gateSecretInput");
-const gateError = document.getElementById("gateError");
-
-const gateForm = document.getElementById("gateForm");
-document.getElementById("gateHost").textContent = location.host;
-
-function setGateBusy(busy, label) {
-  gateForm.classList.toggle("is-busy", busy);
-  document.getElementById("gateSubmit").disabled = busy;
-  gateSecretInput.disabled = busy;
-  document.getElementById("gateSubmitLabel").textContent = busy ? (label || "Checking\u2026") : "Sign in";
-}
-
-function shakeGate() {
-  gateForm.classList.remove("shake");
-  void gateForm.offsetWidth; // restart the animation
-  gateForm.classList.add("shake");
-}
-
-function showGate(error) {
-  clearSecret();
-  setGateBusy(false);
-  gateEl.classList.remove("hidden");
-  appEl.classList.add("hidden");
-  gateError.textContent = error || "";
-  gateSecretInput.value = "";
-  if (error) shakeGate();
-  gateSecretInput.focus();
-}
-
-// Plain-English reason for a sign-in that didn't get an answer. A 401 is
-// handled by api() itself (showGate with "rejected").
-function gateProblem(e) {
-  const msg = String((e && e.message) || e || "");
-  if (/failed to fetch|networkerror|load failed/i.test(msg)) {
-    return "Couldn't reach the server. Check your internet, then try again.";
+  el.className = `toast ${kind === "err" ? "err" : ""}`;
+  el.append(message);
+  if (undo) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "Undo";
+    b.addEventListener("click", () => { el.remove(); undo(); });
+    el.appendChild(b);
   }
-  if (/too many/i.test(msg)) return msg;
-  return `The server had a problem (${msg}). Try again in a moment.`;
+  const box = $("toasts");
+  box.appendChild(el);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => el.remove(), undo ? 7000 : 3500);
 }
 
-async function tryUnlock(secret, remember = false) {
-  setGateBusy(true);
-  // Railway's free plan puts the server to sleep; waking it can take a
-  // while, so say so instead of looking frozen.
-  const slow = setTimeout(() => setGateBusy(true, "Waking the server up\u2026"), 3000);
-  setSecret(secret, remember);
-  try {
-    await refreshStats();
-  } catch (e) {
-    clearTimeout(slow);
-    if (e && e.message === "unauthorized") return; // api() already showed the gate
-    clearSecret();
-    setGateBusy(false);
-    gateEl.classList.remove("hidden");
-    appEl.classList.add("hidden");
-    gateError.textContent = gateProblem(e);
-    gateSecretInput.value = secret;
-    gateSecretInput.focus();
-    return;
-  }
-  clearTimeout(slow);
-  setGateBusy(false);
-  gateEl.classList.add("hidden");
-  appEl.classList.remove("hidden");
-  document.getElementById("hostPill").textContent = location.host;
-  loadPage(0);
-  loadChart();
-  let auto = false;
-  try { auto = localStorage.getItem(AUTO_KEY) === "1"; } catch { /* private window */ }
-  setAuto(auto);
+function copy(text, label) {
+  if (!navigator.clipboard) return toast("Copying isn't available here.", "err");
+  navigator.clipboard.writeText(text).then(() => toast(label), () => toast("Couldn't copy. Select it by hand.", "err"));
 }
 
-gateForm.addEventListener("submit", (e) => {
-  e.preventDefault();
-  const value = gateSecretInput.value.trim();
-  if (!value) { gateError.textContent = "Paste the admin secret first."; shakeGate(); gateSecretInput.focus(); return; }
-  gateError.textContent = "";
-  tryUnlock(value, document.getElementById("gateRemember").checked);
-});
-document.getElementById("gateEye").addEventListener("click", () => {
-  const eye = document.getElementById("gateEye");
-  const show = gateSecretInput.type === "password";
-  gateSecretInput.type = show ? "text" : "password";
-  eye.setAttribute("aria-pressed", String(show));
-  eye.title = show ? "Hide the secret" : "Show the secret";
-  eye.setAttribute("aria-label", eye.title);
-  gateSecretInput.focus();
-});
-document.getElementById("lockBtn").addEventListener("click", () => showGate());
-
-// ---------- Overview ----------
-async function refreshStats() {
-  const stats = await api("/admin/stats");
-  const s = stats.byStatus;
-  document.getElementById("statTotal").textContent = stats.total;
-  document.getElementById("statActive").textContent = s.active;
-  document.getElementById("statRevoked").textContent = s.revoked;
-  document.getElementById("statExpired").textContent = stats.expired ?? 0;
-  document.getElementById("statBound").textContent = stats.bound;
-
-  // active/revoked are mutually exclusive and sum to total, so
-  // they can share one bar honestly. `expired` and `bound` deliberately
-  // are NOT segments - a key can be active and expired at the same
-  // time, and adding them here would make the bar sum past 100% and
-  // imply buckets that don't exist. They stay as counts in the legend.
-  const total = stats.total || 0;
-  const pct = (n) => (total > 0 ? (n / total) * 100 : 0);
-  document.getElementById("segActive").style.width = `${pct(s.active)}%`;
-  document.getElementById("segRevoked").style.width = `${pct(s.revoked)}%`;
-
-  // `?? 0` so this still paints against an older server that predates
-  // these fields, rather than showing "undefined".
-  document.getElementById("statOnline").textContent = stats.online ?? 0;
-  document.getElementById("statExpiring").textContent = stats.expiringSoon ?? 0;
-  document.getElementById("statUnused").textContent = stats.neverUsed ?? 0;
-  document.getElementById("statActivations").textContent = stats.activations24h ?? 0;
-  document.getElementById("statRejections").textContent = stats.deviceRejections24h ?? 0;
-
-  loadFeed().catch(() => {});
+function download(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+const today = () => new Date().toISOString().slice(0, 10);
 
-// ---------- Event history ----------
-// Server event names -> what a person reading the timeline wants to see.
-// `tone` picks the dot colour: green good, amber attention, red refused
-// or destructive, indigo neutral admin changes.
-const EVENT_LABELS = {
-  created:          { text: "Key created",                           tone: "accent" },
-  activated:        { text: "Activated on a device",                 tone: "ok" },
-  migrated:         { text: "Moved to its new device fingerprint",   tone: "accent" },
-  device_updated:   { text: "Same PC after a hardware change",       tone: "ok" },
-  rejected_device:  { text: "Refused: already on another device",    tone: "bad" },
-  rejected_expired: { text: "Refused: key expired",                  tone: "warn" },
-  rejected_revoked: { text: "Refused: key revoked",                  tone: "warn" },
-  revoked:          { text: "Revoked",                               tone: "warn" },
-  reactivated:      { text: "Reactivated",                           tone: "ok" },
-  device_reset:     { text: "Device released",                       tone: "accent" },
-  expiry_changed:   { text: "Expiry changed",                        tone: "accent" },
-  extended:         { text: "Extended",                              tone: "accent" },
-  deleted:          { text: "Deleted",                               tone: "bad" },
-};
-
+// ---------- Dates and time left ----------
+function fmtDate(iso) {
+  return iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+}
+function fmtDateTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+}
 function relTime(iso) {
-  const diff = Date.now() - new Date(iso).getTime();
-  const m = Math.round(diff / 60000);
+  if (!iso) return "—";
+  const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
   if (m < 1) return "just now";
   if (m < 60) return `${m}m ago`;
   const h = Math.round(m / 60);
@@ -1150,801 +610,862 @@ function relTime(iso) {
   const d = Math.round(h / 24);
   return d < 30 ? `${d}d ago` : fmtDate(iso);
 }
-
-/// Renders events into a timeline. `withKey` adds the license key to each
-/// line (the global feed needs it; one key's own history doesn't).
-function renderTimeline(el, events, withKey) {
-  if (!events.length) {
-    el.innerHTML = `<div class="muted-line">Nothing recorded yet.</div>`;
-    return;
+function timeLeft(row) {
+  if (!row.expires_at) {
+    return row.duration_days
+      ? { text: `${row.duration_days}d, starts on first use`, cls: "", title: "The clock starts when this key is first activated" }
+      : { text: "Lifetime", cls: "", title: "This key never expires" };
   }
-  el.innerHTML = events.map((e) => {
-    const label = EVENT_LABELS[e.event] || { text: e.event, tone: "" };
-    const bits = [];
-    if (withKey) bits.push(`<span class="key-chip" data-copy-key="${escapeHtml(e.license_key)}" title="Click to copy">${escapeHtml(e.license_key)}</span>`);
-    if (e.detail) bits.push(escapeHtml(e.detail));
-    // The device is the useful part of a rejection or a reset: it's the
-    // machine that tried, or the one that was let go.
-    if (e.hwid) bits.push(`device ${escapeHtml(e.hwid.slice(0, 10))}&hellip;`);
-    if (e.ip) bits.push(escapeHtml(e.ip));
-    return `
-      <div class="ev">
-        <span class="ev-dot ${label.tone}"></span>
-        <div>
-          <div class="ev-title">${escapeHtml(label.text)}</div>
-          ${bits.length ? `<div class="ev-meta">${bits.join(" &middot; ")}</div>` : ""}
-        </div>
-        <span class="ev-time tnum" title="${escapeHtml(fmtDateTime(e.created_at))}">${escapeHtml(relTime(e.created_at))}</span>
-      </div>`;
-  }).join("");
-  el.querySelectorAll("[data-copy-key]").forEach((k) => k.addEventListener("click", () => copyKey(k.dataset.copyKey)));
-}
-
-async function loadFeed() {
-  const events = await api("/admin/events?limit=40");
-  renderTimeline(document.getElementById("feed"), events, true);
-}
-
-const historyModal = document.getElementById("historyModal");
-async function openHistory(key) {
-  document.getElementById("historyKey").textContent = key;
-  const list = document.getElementById("historyList");
-  list.innerHTML = `<div class="muted-line">Loading&hellip;</div>`;
-  historyModal.classList.remove("hidden");
-  try {
-    renderTimeline(list, await api(`/admin/licenses/${encodeURIComponent(key)}/events`), false);
-  } catch (e) {
-    list.innerHTML = `<div class="muted-line">${escapeHtml(e.message)}</div>`;
+  const ms = new Date(row.expires_at).getTime() - Date.now();
+  const title = fmtDateTime(row.expires_at);
+  if (ms <= 0) {
+    const ago = Math.floor(-ms / DAY_MS);
+    return { text: ago === 0 ? "Expired today" : `Expired ${ago}d ago`, cls: "t-gone", title };
   }
+  const days = Math.floor(ms / DAY_MS);
+  const hours = Math.floor((ms % DAY_MS) / 3600000);
+  const text = days > 0 ? `${days}d ${hours}h left` : hours > 0 ? `${hours}h left` : `${Math.max(1, Math.floor(ms / 60000))}m left`;
+  return { text, cls: days < 7 ? "t-soon" : "", title };
 }
-function closeHistory() { historyModal.classList.add("hidden"); }
-document.getElementById("historyClose").addEventListener("click", closeHistory);
-historyModal.addEventListener("click", (e) => { if (e.target === historyModal) closeHistory(); });
-
-// Each health tile is a shortcut to its own filter on the table.
-document.querySelectorAll(".tile[data-filter]").forEach((t) => {
-  t.addEventListener("click", () => {
-    if (!t.dataset.filter) return;
-    statusFilter.value = t.dataset.filter;
-    loadPage(0);
-    document.querySelector(".toolbar").scrollIntoView({ behavior: "smooth", block: "start" });
-  });
-});
-
-// Export what's currently shown (filter + search, not the current page).
-// Fetched rather than linked because the admin secret travels as a
-// header, which a plain download link can't send.
-document.getElementById("exportBtn").addEventListener("click", async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true;
-  try {
-    const params = new URLSearchParams();
-    if (statusFilter.value) params.set("status", statusFilter.value);
-    if (searchInput.value.trim()) params.set("q", searchInput.value.trim());
-    const res = await fetch(`/admin/export.csv?${params}`, { headers: { "X-Admin-Secret": getSecret() } });
-    if (res.status === 401) { showGate("That secret was rejected by the server."); return; }
-    if (!res.ok) throw new Error(`Export failed (${res.status}).`);
-    downloadBlob(await res.blob(), `licenses-${new Date().toISOString().slice(0, 10)}.csv`);
-    toast("Export downloaded.");
-  } catch (err) {
-    toast(err.message, "err");
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+function statusOf(row) {
+  if (row.status === "revoked") return { text: "Revoked", cls: "bad" };
+  if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) return { text: "Expired", cls: "warn" };
+  if (row.last_seen_at && Date.now() - new Date(row.last_seen_at).getTime() < 10 * 60000) return { text: "Online", cls: "ok" };
+  if (!row.hwid && !row.last_seen_at) return { text: "Unused", cls: "" };
+  return { text: "Active", cls: "ok" };
 }
-
-// ---------- Expiry formatting ----------
-const DAY_MS = 24 * 60 * 60 * 1000;
-// Within this long, an upcoming expiry is worth flagging amber rather
-// than stating neutrally - it is the window where you would want to
-// chase a renewal before the customer is locked out.
-const SOON_DAYS = 7;
-
-function fmtDate(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function fmtDateTime(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + ", " +
-         d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
-/// Turns an expires_at into { text, cls } for the Expires column.
-/// Written from the reader's point of view - "in 12 days" is what you
-/// want to know at a glance, with the exact date on hover.
-function describeExpiry(iso) {
-  if (!iso) return { text: "Never", cls: "never", title: "This key does not expire" };
-  const when = new Date(iso).getTime();
-  const diff = when - Date.now();
-  const days = Math.round(Math.abs(diff) / DAY_MS);
-  if (diff <= 0) {
-    return { text: days === 0 ? "Expired today" : `Expired ${days}d ago`, cls: "gone", title: fmtDate(iso) };
-  }
-  const text = days === 0 ? "Expires today" : days === 1 ? "In 1 day" : `In ${days} days`;
-  return { text, cls: days <= SOON_DAYS ? "soon" : "", title: fmtDate(iso) };
-}
-
-function isExpired(row) {
-  return !!row.expires_at && new Date(row.expires_at).getTime() <= Date.now();
-}
-
-// ---------- Table / pagination ----------
-const PAGE_SIZE = 25;
-let currentPage = 0;
-let currentRowCount = 0;
-let searchDebounce = null;
-let rowsByKey = new Map();
-
-const rowsEl = document.getElementById("rows");
-const loadingEl = document.getElementById("loadingState");
-const emptyEl = document.getElementById("emptyState");
-const searchInput = document.getElementById("searchInput");
-const statusFilter = document.getElementById("statusFilter");
-
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
-async function loadPage(page, { quiet = false } = {}) {
-  // A different page or filter starts a fresh selection; a quiet reload
-  // (auto-refresh, after an action) keeps it.
-  if (!quiet && page !== currentPage) selected.clear();
-  currentPage = page;
-  if (!quiet) {
-    loadingEl.classList.remove("hidden");
-    emptyEl.classList.add("hidden");
-    rowsEl.innerHTML = "";
-  }
-
-  const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
-  if (statusFilter.value) params.set("status", statusFilter.value);
-  if (searchInput.value.trim()) params.set("q", searchInput.value.trim());
-
-  let rows;
-  try {
-    rows = await api(`/admin/licenses?${params.toString()}`);
-  } catch (e) {
-    loadingEl.classList.add("hidden");
-    if (e.message !== "unauthorized") toast(e.message, "err");
-    return;
-  }
-  loadingEl.classList.add("hidden");
-  currentRowCount = rows.length;
-  if (quiet) rowsEl.innerHTML = "";
-  renderRows(rows);
-  markUpdated();
-  updatePagination();
-}
-
-function renderRows(rows) {
-  if (rows.length === 0) {
-    rowsByKey = new Map();
-    paintSelection();
-    const filtered = statusFilter.value || searchInput.value.trim();
-    emptyEl.innerHTML = filtered
-      ? "<b>Nothing matches this filter</b>Clear the search or pick a different status."
-      : "<b>No keys yet</b>Create one to get started.";
-    emptyEl.classList.remove("hidden");
-    return;
-  }
-  emptyEl.classList.add("hidden");
-  rowsByKey = new Map(rows.map((r) => [r.license_key, r]));
-  rowsEl.innerHTML = rows.map(rowHtml).join("");
-
-  rowsEl.querySelectorAll("[data-copy-key]").forEach((el) => {
-    el.addEventListener("click", () => copyKey(el.dataset.copyKey));
-  });
-  rowsEl.querySelectorAll("[data-action]").forEach((btn) => {
-    btn.addEventListener("click", () => runAction(btn.dataset.action, btn.dataset.key, btn));
-  });
-  rowsEl.querySelectorAll("[data-select]").forEach((box) => {
-    box.addEventListener("change", () => {
-      if (box.checked) selected.add(box.dataset.select); else selected.delete(box.dataset.select);
-      box.closest("tr").classList.toggle("selected", box.checked);
-      paintSelection();
-    });
-  });
-  paintSelection();
-  rowsEl.querySelectorAll("[data-more]").forEach((btn) => {
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      openRowMenu(btn, btn.dataset.more, rowsByKey.get(btn.dataset.more));
-    });
-  });
-}
-
-// ---------- Row overflow menu ----------
-// One shared element rather than a menu per row: only ever one is open,
-// and this way nothing has to be torn down when the table re-renders.
-let openMenuEl = null;
-
-function closeRowMenu() {
-  if (openMenuEl) { openMenuEl.remove(); openMenuEl = null; }
-}
-
-function openRowMenu(anchor, key, row) {
-  closeRowMenu();
-  const menu = document.createElement("div");
-  menu.className = "menu";
-
-  const add = (label, handler, danger) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = label;
-    if (danger) b.className = "danger";
-    b.addEventListener("click", () => { closeRowMenu(); handler(); });
-    menu.appendChild(b);
-  };
-
-  add("History", () => openHistory(key));
-  // Extend only makes sense for a key that has an expiry - the server
-  // refuses it for a never-expiring key rather than shortening it, so
-  // the menu doesn't offer it either.
-  if (row && row.expires_at) {
-    add("Extend +30 days", () => runExtend(key, 30, anchor));
-    add("Extend +1 year", () => runExtend(key, 365, anchor));
-  }
-  const sep0 = document.createElement("div");
-  sep0.className = "sep";
-  menu.appendChild(sep0);
-  if (row && row.hwid) add("Reset device", () => runAction("reset-hwid", key, anchor));
-
-  const sep = document.createElement("div");
-  sep.className = "sep";
-  menu.appendChild(sep);
-  add("Delete key", () => runAction("delete", key, anchor), true);
-
-  document.body.appendChild(menu);
-
-  // Positioned against the viewport (the menu is position: fixed), and
-  // flipped above the button when there isn't room below.
-  const r = anchor.getBoundingClientRect();
-  const mh = menu.offsetHeight;
-  const top = r.bottom + 6 + mh > window.innerHeight ? r.top - mh - 6 : r.bottom + 6;
-  menu.style.top = `${Math.max(8, top)}px`;
-  menu.style.left = `${Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8))}px`;
-  openMenuEl = menu;
-}
-
-document.addEventListener("click", (e) => {
-  if (openMenuEl && !openMenuEl.contains(e.target)) closeRowMenu();
-});
-window.addEventListener("resize", closeRowMenu);
-window.addEventListener("scroll", closeRowMenu, true);
-
-function rowHtml(row) {
-  const hwidCell = row.hwid
-    ? `<span class="hwid-cell bound" title="${escapeHtml(row.hwid)}">${escapeHtml(row.hwid.slice(0, 8))}&hellip;</span>`
-    : `<span class="hwid-cell">Unbound</span>`;
-
-  // Escaped even though a license_key is server-generated from a fixed
-  // A-Z/2-9 alphabet and so cannot currently contain markup - "the
-  // generator can't produce anything dangerous" is a property of code
-  // elsewhere, not of this template. Cheap to not depend on it.
-  const key = escapeHtml(row.license_key);
-
-  // An expired key keeps whatever status it has (usually active), so
-  // both facts are shown: the status pill plus an Expired pill. The
-  // server rejects it either way - see /verify's expiry guard.
-  const statusPill = `<span class="pill pill-${escapeHtml(row.status)}">${escapeHtml(row.status.charAt(0).toUpperCase() + row.status.slice(1))}</span>`;
-  const expiredPill = isExpired(row) ? `<span class="pill pill-expired">Expired</span>` : "";
-
-  const exp = describeExpiry(row.expires_at);
-
-  // Revoke and Expiry are the two reached for most often, so they stay
-  // inline; device reset and delete go behind the menu.
-  const revokeBtn = row.status === "revoked"
-    ? `<button data-action="unrevoke" data-key="${key}">Unrevoke</button>`
-    : `<button data-action="revoke" data-key="${key}">Revoke</button>`;
-  const expiryBtn = `<button data-action="expiry" data-key="${key}">Expiry</button>`;
-  const moreBtn = `<button class="row-more" data-more="${key}" title="More actions" aria-label="More actions">&#x22EF;</button>`;
-
-  return `
-    <tr class="${selected.has(row.license_key) ? "selected" : ""}">
-      <td class="sel-col"><input type="checkbox" class="sel-box" data-select="${key}" aria-label="Select ${key}" ${selected.has(row.license_key) ? "checked" : ""} /></td>
-      <td><span class="key-chip" data-copy-key="${key}" title="Click to copy">${key}</span></td>
-      <td class="col-status"><div class="status-cell">${statusPill}${expiredPill}</div></td>
-      <td class="col-device">${hwidCell}</td>
-      <td class="exp-cell ${exp.cls} tnum" title="${escapeHtml(exp.title)}">${escapeHtml(exp.text)}</td>
-      <td class="ts-cell col-seen tnum">${escapeHtml(fmtDateTime(row.last_seen_at))}</td>
-      <td><div class="row-actions">${revokeBtn}${expiryBtn}${moreBtn}</div></td>
-    </tr>
-  `;
-}
-
-function copyKey(key) {
-  navigator.clipboard?.writeText(key).then(
-    () => toast("Key copied."),
-    () => toast("Couldn't copy - select and copy it manually.", "err")
-  );
-}
-
-async function runAction(action, key, btn) {
-  if (action === "expiry") { openExpiryModal(key); return; }
-
-  if (action === "delete" && !confirm(`Permanently delete license ${key}?`)) {
-    return;
-  }
-  btn.disabled = true;
-  try {
-    if (action === "delete") {
-      await api(`/admin/licenses/${encodeURIComponent(key)}`, { method: "DELETE" });
-      toast("Key deleted.");
-    } else {
-      await api(`/admin/licenses/${encodeURIComponent(key)}/${action}`, { method: "POST" });
-      toast({ revoke: "Key revoked.", unrevoke: "Key reactivated.", "reset-hwid": "Device reset." }[action] || "Done.");
-    }
-    refreshStats().catch(() => {});
-    loadPage(currentPage);
-  } catch (e) {
-    if (e.message !== "unauthorized") toast(e.message, "err");
-    btn.disabled = false;
-  }
-}
-
-async function runExtend(key, days, btn) {
-  btn.disabled = true;
-  try {
-    const r = await api(`/admin/licenses/${encodeURIComponent(key)}/extend`, {
-      method: "POST",
-      body: JSON.stringify({ days }),
-    });
-    toast(`Extended to ${fmtDate(r.expires_at)}.`);
-    refreshStats().catch(() => {});
-    loadPage(currentPage);
-  } catch (e) {
-    if (e.message !== "unauthorized") toast(e.message, "err");
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function updatePagination() {
-  const start = currentPage * PAGE_SIZE;
-  document.getElementById("pageInfo").textContent =
-    currentRowCount === 0 ? "No results" : `Showing ${start + 1}–${start + currentRowCount}`;
-  document.getElementById("prevPageBtn").disabled = currentPage === 0;
-  document.getElementById("nextPageBtn").disabled = currentRowCount < PAGE_SIZE;
-}
-
-document.getElementById("prevPageBtn").addEventListener("click", () => { if (currentPage > 0) loadPage(currentPage - 1); });
-document.getElementById("nextPageBtn").addEventListener("click", () => { if (currentRowCount >= PAGE_SIZE) loadPage(currentPage + 1); });
-document.getElementById("refreshBtn").addEventListener("click", refreshAll);
-document.getElementById("refreshBtn2").addEventListener("click", refreshAll);
-statusFilter.addEventListener("change", () => { selected.clear(); loadPage(0); });
-searchInput.addEventListener("input", () => {
-  clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(() => { selected.clear(); loadPage(0); }, 300);
-});
-
-// ---------- Selection + bulk actions ----------
-const selected = new Set();
-const bulkBar = document.getElementById("bulkBar");
-const selectAllBox = document.getElementById("selectAll");
-
-function paintSelection() {
-  const onPage = [...rowsByKey.keys()];
-  const picked = onPage.filter((k) => selected.has(k)).length;
-  selectAllBox.checked = onPage.length > 0 && picked === onPage.length;
-  selectAllBox.indeterminate = picked > 0 && picked < onPage.length;
-  document.getElementById("bulkCount").textContent = String(selected.size);
-  bulkBar.classList.toggle("hidden", selected.size === 0);
-}
-
-selectAllBox.addEventListener("change", () => {
-  for (const k of rowsByKey.keys()) {
-    if (selectAllBox.checked) selected.add(k); else selected.delete(k);
-  }
-  rowsEl.querySelectorAll("[data-select]").forEach((b) => {
-    b.checked = selected.has(b.dataset.select);
-    b.closest("tr").classList.toggle("selected", b.checked);
-  });
-  paintSelection();
-});
-
-const BULK_DONE = {
-  revoke: (n) => `${n} key${n === 1 ? "" : "s"} revoked.`,
-  reactivate: (n) => `${n} key${n === 1 ? "" : "s"} reactivated.`,
-  extend: (n) => `${n} key${n === 1 ? "" : "s"} extended by 30 days.`,
-  "reset-hwid": (n) => `${n} device${n === 1 ? "" : "s"} reset.`,
-  delete: (n) => `${n} key${n === 1 ? "" : "s"} deleted.`,
-};
-
-bulkBar.addEventListener("click", async (e) => {
-  const btn = e.target.closest("[data-bulk]");
-  if (!btn) return;
-  const what = btn.dataset.bulk;
-  const keys = [...selected];
-  if (what === "clear") { selected.clear(); renderRows([...rowsByKey.values()]); return; }
-  if (what === "copy") {
-    navigator.clipboard?.writeText(keys.join("\n")).then(
-      () => toast(`${keys.length} key${keys.length === 1 ? "" : "s"} copied.`),
-      () => toast("Couldn't copy.", "err"));
-    return;
-  }
-  const action = what === "extend-30" ? "extend" : what;
-  if (action === "delete" && !confirm(`Permanently delete ${keys.length} key${keys.length === 1 ? "" : "s"}? Their history is kept.`)) return;
-  if (action === "revoke" && keys.length > 1 && !confirm(`Revoke ${keys.length} keys? They stop working at their next check (within 5 minutes).`)) return;
-  bulkBar.querySelectorAll("button").forEach((b) => (b.disabled = true));
-  try {
-    const r = await api("/admin/licenses/bulk", {
-      method: "POST",
-      body: JSON.stringify({ action, keys, ...(action === "extend" ? { days: 30 } : {}) }),
-    });
-    const skipped = r.requested - r.changed;
-    toast(BULK_DONE[action](r.changed) + (skipped ? ` ${skipped} already were, or didn't apply.` : ""));
-    if (action === "delete") selected.clear();
-    refreshAll();
-  } catch (err) {
-    if (err.message !== "unauthorized") toast(err.message, "err");
-  } finally {
-    bulkBar.querySelectorAll("button").forEach((b) => (b.disabled = false));
-  }
-});
-
-// ---------- Activity chart ----------
-async function loadChart() {
-  let days;
-  try { days = await api("/admin/stats/daily?days=14"); } catch { return; }
-  const chart = document.getElementById("chart");
-  const max = Math.max(1, ...days.flatMap((d) => [d.activations, d.created, d.rejections]));
-  const today = new Date().toISOString().slice(0, 10);
-  chart.style.setProperty("--n", String(days.length));
-  chart.innerHTML = days.map((d) => {
-    const h = (n) => `${Math.max(2, (n / max) * 100)}%`;
-    const dt = new Date(`${d.day}T00:00:00Z`);
-    const label = dt.toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" });
-    const tip = `${label}: ${d.activations} activation${d.activations === 1 ? "" : "s"}, ${d.created} key${d.created === 1 ? "" : "s"} created, ${d.rejections} refused`;
-    return `<div class="chart-day${d.day === today ? " today" : ""}" title="${escapeHtml(tip)}">
-      <div class="chart-bars">
-        <span class="b-act${d.activations ? "" : " zero"}" style="height:${h(d.activations)}"></span>
-        <span class="b-new${d.created ? "" : " zero"}" style="height:${h(d.created)}"></span>
-        <span class="b-rej${d.rejections ? "" : " zero"}" style="height:${h(d.rejections)}"></span>
-      </div>
-      <span class="chart-lbl">${escapeHtml(d.day === today ? "Today" : dt.toLocaleDateString(undefined, { day: "numeric", timeZone: "UTC" }))}</span>
-    </div>`;
-  }).join("");
-  const sum = (k) => days.reduce((a, d) => a + d[k], 0);
-  const plural = (n, one, many) => `<b>${n}</b> ${n === 1 ? one : many}`;
-  document.getElementById("chartSum").innerHTML =
-    `<span class="k-act"><i></i>${plural(sum("activations"), "activation", "activations")}</span>` +
-    `<span class="k-new"><i></i>${plural(sum("created"), "key created", "keys created")}</span>` +
-    `<span class="k-rej"><i></i>${plural(sum("rejections"), "refused check", "refused checks")}</span>`;
-}
-
-// ---------- Refresh: manual, auto, "updated Xs ago" ----------
-let lastUpdated = 0;
-function markUpdated() { lastUpdated = Date.now(); paintUpdated(); }
-function paintUpdated() {
-  const el = document.getElementById("updatedAgo");
-  if (!lastUpdated) { el.textContent = ""; return; }
-  const s = Math.round((Date.now() - lastUpdated) / 1000);
-  el.textContent = s < 5 ? "Updated just now" : s < 60 ? `Updated ${s}s ago` : `Updated ${Math.floor(s / 60)}m ago`;
-}
-setInterval(paintUpdated, 5000);
-
-function refreshAll() {
-  refreshStats().catch(() => {});
-  loadChart();
-  loadPage(currentPage, { quiet: true });
-}
-
-const AUTO_KEY = "afk-admin-auto";
-let autoTimer = null;
-function anyModalOpen() {
-  return !!document.querySelector(".modal-overlay:not(.hidden)") || !!openMenuEl;
-}
-function setAuto(on) {
-  const btn = document.getElementById("autoBtn");
-  btn.classList.toggle("on", on);
-  btn.setAttribute("aria-pressed", on ? "true" : "false");
-  try { localStorage.setItem(AUTO_KEY, on ? "1" : "0"); } catch { /* private window */ }
-  clearInterval(autoTimer);
-  autoTimer = on ? setInterval(() => {
-    // Never while something is being edited, read or picked.
-    if (document.hidden || appEl.classList.contains("hidden") || anyModalOpen() ||
-        selected.size > 0 || document.activeElement === searchInput) return;
-    refreshAll();
-  }, 30000) : null;
-}
-document.getElementById("autoBtn").addEventListener("click", () =>
-  setAuto(!document.getElementById("autoBtn").classList.contains("on")));
-
-// Keyboard: / search, N new key, R refresh - not while typing.
-document.addEventListener("keydown", (e) => {
-  if (appEl.classList.contains("hidden") || e.ctrlKey || e.metaKey || e.altKey) return;
-  const t = e.target;
-  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
-  if (anyModalOpen()) return;
-  if (e.key === "/") { e.preventDefault(); searchInput.focus(); searchInput.select(); }
-  else if (e.key === "n" || e.key === "N") { e.preventDefault(); document.getElementById("newKeyBtn").click(); }
-  else if (e.key === "r" || e.key === "R") { e.preventDefault(); refreshAll(); }
-});
 
 // ---------- Duration picker ----------
-// Shared by the create-key modal and the change-expiry modal: the same
-// preset chips plus an exact date, so there is one way to express an
-// expiry rather than two that drift apart.
-const PRESETS = [
-  { label: "Never", days: 0 },
-  { label: "7 days", days: 7 },
-  { label: "30 days", days: 30 },
-  { label: "90 days", days: 90 },
-  { label: "1 year", days: 365 },
-];
+// The one way a length of time is chosen, everywhere: quick picks or a custom
+// number of days. `mode` "set" adds Lifetime and when the clock starts; "add"
+// is only how many days to add.
+const QUICK_DAYS = [1, 7, 30, 90, 365];
 
-function buildPicker({ chipsEl, dateEl, previewEl, initialDays = 0 }) {
-  const state = { days: initialDays, exact: "" };
+function buildPicker(host, { mode = "set", defaultStart = "activation" } = {}) {
+  const state = { days: 30, lifetime: false, start: defaultStart };
+  host.innerHTML = `
+    <div class="chips">
+      ${QUICK_DAYS.map((d) => `<button type="button" class="chip" data-d="${d}">${d}d</button>`).join("")}
+      ${mode === "set" ? `<button type="button" class="chip" data-life="1">Lifetime</button>` : ""}
+      <label class="custom-days">Custom <input type="number" min="1" max="3650" placeholder="days" aria-label="Custom number of days" /></label>
+    </div>
+    ${mode === "set" ? `<div class="form-row" data-start-row>
+      <span class="field-label">The clock starts</span>
+      <div class="seg">
+        <button type="button" data-start="activation">On first activation</button>
+        <button type="button" data-start="now">Right now</button>
+      </div>
+    </div>` : ""}
+    <div class="picker-note"></div>`;
+  const custom = host.querySelector("input");
+  const customWrap = host.querySelector(".custom-days");
+  const note = host.querySelector(".picker-note");
+  const startRow = host.querySelector("[data-start-row]");
 
+  function customDays() {
+    if (custom.value.trim() === "") return null;
+    const n = Number(custom.value);
+    return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : NaN;
+  }
   function render() {
-    [...chipsEl.children].forEach((c) => {
-      c.classList.toggle("on", !state.exact && Number(c.dataset.days) === state.days);
-    });
-    if (state.exact) {
-      const when = new Date(state.exact + "T23:59:59");
-      previewEl.innerHTML = Number.isNaN(when.getTime())
-        ? "That date isn't valid."
-        : `Expires <b>${escapeHtml(fmtDate(when.toISOString()))}</b>`;
-    } else if (state.days === 0) {
-      previewEl.innerHTML = "This key will <b>never expire</b>";
-    } else {
-      const when = new Date(Date.now() + state.days * DAY_MS);
-      previewEl.innerHTML = `Expires <b>${escapeHtml(fmtDate(when.toISOString()))}</b>`;
-    }
+    const typed = customDays();
+    const days = typed === null ? state.days : typed;
+    host.querySelectorAll("[data-d]").forEach((c) => c.classList.toggle("on", typed === null && !state.lifetime && Number(c.dataset.d) === state.days));
+    const lifeChip = host.querySelector("[data-life]");
+    if (lifeChip) lifeChip.classList.toggle("on", typed === null && state.lifetime);
+    customWrap.classList.toggle("on", typed !== null);
+    host.querySelectorAll("[data-start]").forEach((b) => b.classList.toggle("on", b.dataset.start === state.start));
+    const lifetime = typed === null && state.lifetime;
+    if (startRow) startRow.classList.toggle("hidden", lifetime);
+    if (Number.isNaN(days)) note.innerHTML = "A custom length is 1 to 3650 whole days.";
+    else if (mode === "add") note.innerHTML = `Adds <b>${plural(days, "day")}</b>.`;
+    else if (lifetime) note.innerHTML = "This key will <b>never expire</b>.";
+    else if (state.start === "activation") note.innerHTML = `Lasts <b>${plural(days, "day")}</b> from the moment it's first activated.`;
+    else note.innerHTML = `Lasts <b>${plural(days, "day")}</b> from now, until <b>${esc(fmtDate(new Date(Date.now() + days * DAY_MS).toISOString()))}</b>.`;
   }
-
-  chipsEl.innerHTML = "";
-  for (const preset of PRESETS) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "chip";
-    btn.textContent = preset.label;
-    btn.dataset.days = String(preset.days);
-    btn.addEventListener("click", () => {
-      state.days = preset.days;
-      state.exact = "";
-      dateEl.value = "";
-      render();
-    });
-    chipsEl.appendChild(btn);
-  }
-
-  dateEl.addEventListener("input", () => {
-    state.exact = dateEl.value;
+  host.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    if (b.dataset.d) { state.days = Number(b.dataset.d); state.lifetime = false; custom.value = ""; }
+    if (b.dataset.life) { state.lifetime = true; custom.value = ""; }
+    if (b.dataset.start) state.start = b.dataset.start;
     render();
   });
-
+  custom.addEventListener("input", render);
   render();
-
   return {
-    reset(days = 0) { state.days = days; state.exact = ""; dateEl.value = ""; render(); },
-    // The body shape POST /admin/licenses and .../expiry both accept.
-    // An exact date wins when one is set; otherwise the chip's days,
-    // where 0 means "never" (the server treats 0 days as no expiry
-    // rather than "expires immediately" - see resolveExpiry).
-    payload() {
-      if (state.exact) return { expires_at: new Date(state.exact + "T23:59:59").toISOString() };
-      return { expires_in_days: state.days };
+    reset(start = defaultStart) { state.days = 30; state.lifetime = false; state.start = start; custom.value = ""; render(); },
+    /// What the server takes, or null if the custom number is no good.
+    value() {
+      const typed = customDays();
+      if (Number.isNaN(typed)) return null;
+      const days = typed === null ? state.days : typed;
+      if (mode === "add") return { days };
+      if (typed === null && state.lifetime) return { duration: "lifetime" };
+      return { duration: `${days}d`, starts: state.start };
     },
   };
 }
 
-// ---------- New-key modal ----------
-const newKeyModal = document.getElementById("newKeyModal");
-const newKeyResult = document.getElementById("newKeyResult");
-const newKeyPicker = buildPicker({
-  chipsEl: document.getElementById("newKeyChips"),
-  dateEl: document.getElementById("newKeyExactDate"),
-  previewEl: document.getElementById("newKeyPreview"),
+// ---------- Views ----------
+const VIEWS = ["overview", "keys", "activity", "tools"];
+let currentView = "overview";
+
+function showView(view) {
+  currentView = VIEWS.includes(view) ? view : "overview";
+  VIEWS.forEach((v) => $(`view-${v}`).classList.toggle("hidden", v !== currentView));
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.dataset.view === currentView));
+  if (location.hash.slice(1) !== currentView) history.replaceState(null, "", `#${currentView}`);
+  refreshView();
+}
+document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
+
+function refreshView() {
+  if (currentView === "overview") return loadOverview();
+  if (currentView === "keys") return loadKeys();
+  if (currentView === "activity") return loadActivity(true);
+  return loadSystem();
+}
+
+// ---------- Overview ----------
+const TILES = [
+  ["total", "All keys", "", ""],
+  ["active", "Active", "ok", "active"],
+  ["online", "Online now", "ok", "online"],
+  ["waiting", "Waiting for first use", "", "waiting"],
+  ["expiringSoon", "Expiring within 7 days", "warn", "expiring"],
+  ["expired", "Expired", "warn", "expired"],
+  ["revoked", "Revoked", "bad", "revoked"],
+  ["lifetime", "Lifetime", "", "lifetime"],
+  ["activations24h", "Activations, 24h", "ok", null],
+  ["deviceRejections24h", "Wrong-device tries, 24h", "bad", null],
+];
+
+async function loadOverview() {
+  const stats = await api("/admin/stats");
+  const values = { ...stats, active: stats.byStatus.active, revoked: stats.byStatus.revoked };
+  $("tiles").innerHTML = TILES.map(([k, label, tone, filter]) => `
+    <button type="button" class="tile" ${filter === null ? "disabled" : `data-filter="${filter}"`}>
+      <span class="l">${esc(label)}</span><span class="v ${tone}">${esc(values[k] ?? 0)}</span>
+    </button>`).join("");
+  markUpdated();
+  loadChart().catch(() => {});
+  loadAttention().catch(() => {});
+  api("/admin/events?limit=12").then((events) => renderTimeline($("recent"), events, true)).catch(() => {});
+}
+$("tiles").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-filter]");
+  if (!t) return;
+  $("statusFilter").value = t.dataset.filter;
+  $("searchInput").value = "";
+  page = 0;
+  selected.clear();
+  showView("keys");
+});
+$("allActivityBtn").addEventListener("click", () => showView("activity"));
+
+let chartDays = 14;
+$("chartRange").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-days]");
+  if (!b) return;
+  chartDays = Number(b.dataset.days);
+  $("chartRange").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+  loadChart().catch(showError);
 });
 
-const newKeyCount = document.getElementById("newKeyCount");
-
-function openNewKeyModal() {
-  newKeyResult.innerHTML = "";
-  newKeyResult.className = "";
-  newKeyCount.value = "1";
-  newKeyPicker.reset(0);
-  newKeyModal.classList.remove("hidden");
+async function loadChart() {
+  const days = await api(`/admin/stats/daily?days=${chartDays}`);
+  const max = Math.max(1, ...days.flatMap((d) => [d.activations, d.created, d.rejections]));
+  const h = (n) => `${n ? Math.max(4, (n / max) * 100) : 2}%`;
+  $("chart").innerHTML = days.map((d) => `
+    <div class="chart-day" title="${esc(`${d.day}: ${plural(d.activations, "activation")}, ${plural(d.created, "key")} created, ${d.rejections} refused`)}">
+      <span class="${d.activations ? "b-act" : ""}" style="height:${h(d.activations)}"></span>
+      <span class="${d.created ? "b-new" : ""}" style="height:${h(d.created)}"></span>
+      <span class="${d.rejections ? "b-rej" : ""}" style="height:${h(d.rejections)}"></span>
+    </div>`).join("");
+  const sum = (k) => days.reduce((a, d) => a + d[k], 0);
+  $("chartSum").innerHTML =
+    `<span><i class="b-act"></i>${esc(plural(sum("activations"), "activation"))}</span>` +
+    `<span><i class="b-new"></i>${esc(plural(sum("created"), "key"))} created</span>` +
+    `<span><i class="b-rej"></i>${esc(sum("rejections"))} refused</span>`;
 }
-function closeNewKeyModal() {
-  newKeyModal.classList.add("hidden");
-  refreshStats().catch(() => {});
-  loadPage(0);
-}
 
-document.getElementById("newKeyBtn").addEventListener("click", openNewKeyModal);
-document.getElementById("newKeyCancel").addEventListener("click", closeNewKeyModal);
-newKeyModal.addEventListener("click", (e) => { if (e.target === newKeyModal) closeNewKeyModal(); });
-
-document.getElementById("newKeyCreate").addEventListener("click", async (e) => {
-  const btn = e.currentTarget;
-  const count = Math.round(Number(newKeyCount.value));
-  if (!Number.isInteger(count) || count < 1 || count > 100) {
-    toast("Pick between 1 and 100 keys.", "err");
+async function loadAttention() {
+  const rows = await api("/admin/attention");
+  if (!rows.length) {
+    $("attention").innerHTML = `<div class="empty"><b>Nothing to look at</b>Keys show up here when another PC keeps trying them or their device keeps being reset.</div>`;
     return;
   }
-  btn.disabled = true;
-  try {
-    // A single key still uses the original request shape (no `count`),
-    // so this keeps working against an older server.
-    const body = { ...newKeyPicker.payload(), ...(count > 1 ? { count } : {}) };
-    const result = await api("/admin/licenses", { method: "POST", body: JSON.stringify(body) });
-    const created = count > 1 ? result.created : [result];
-    const first = created[0];
-    const expiryLine = first.expires_at ? `Expires ${escapeHtml(fmtDate(first.expires_at))}` : "Never expires";
+  $("attention").innerHTML = rows.map((r) => {
+    const bits = [];
+    if (r.wrong_device_tries) bits.push(`${plural(r.wrong_device_tries, "wrong-device try", "wrong-device tries")} from ${plural(r.other_devices, "PC")} this week`);
+    if (r.device_resets) bits.push(`${plural(r.device_resets, "device reset")} this month`);
+    return `<button type="button" class="attn" data-open="${esc(r.license_key)}">
+      <span class="mono" style="font-size:12.5px;font-weight:600">${esc(r.license_key)}</span>
+      <span class="dim" style="font-size:12px;flex:1;min-width:0">${esc(bits.join(", "))}</span>
+      <span class="faint" style="font-size:12px;white-space:nowrap">${esc(relTime(r.last_at))}</span>
+    </button>`;
+  }).join("");
+}
+$("attention").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-open]");
+  if (b) openDrawer(b.dataset.open);
+});
 
-    newKeyResult.className = "new-key-result";
-    if (created.length === 1) {
-      newKeyResult.innerHTML =
-        `<div class="rk">${expiryLine} &middot; click the key to copy it</div>` +
-        `<span class="key-chip" data-copy-key="${escapeHtml(first.license_key)}" title="Click to copy">${escapeHtml(first.license_key)}</span>`;
-    } else {
-      newKeyResult.innerHTML =
-        `<div class="rk">${created.length} keys &middot; ${expiryLine}</div>` +
-        `<div class="key-list">${created.map((k) =>
-          `<span class="key-chip" data-copy-key="${escapeHtml(k.license_key)}" title="Click to copy">${escapeHtml(k.license_key)}</span>`).join("")}</div>` +
-        `<div class="result-actions">` +
-        `<button type="button" class="btn-ghost" id="copyAllKeys">Copy all</button>` +
-        `<button type="button" class="btn-ghost" id="downloadKeys">Download .txt</button>` +
-        `</div>`;
-      // One key per line - pastes straight into a Discord message or a
-      // shop's stock field.
-      const text = created.map((k) => k.license_key).join("\n") + "\n";
-      document.getElementById("copyAllKeys").addEventListener("click", () => {
-        navigator.clipboard?.writeText(text).then(
-          () => toast(`${created.length} keys copied.`),
-          () => toast("Couldn't copy - use Download instead.", "err")
-        );
-      });
-      document.getElementById("downloadKeys").addEventListener("click", () => {
-        downloadBlob(new Blob([text], { type: "text/plain" }), `keys-${new Date().toISOString().slice(0, 10)}.txt`);
-      });
-    }
-    newKeyResult.querySelectorAll("[data-copy-key]").forEach((el) =>
-      el.addEventListener("click", (ev) => copyKey(ev.currentTarget.dataset.copyKey)));
-    toast(created.length === 1 ? "Key created." : `${created.length} keys created.`);
-  } catch (err) {
-    if (err.message !== "unauthorized") toast(err.message, "err");
-  } finally {
-    btn.disabled = false;
+// ---------- Timeline ----------
+const EVENT_LABELS = {
+  created: ["Key created", "accent"],
+  activated: ["Activated on a PC", "ok"],
+  device_updated: ["Same PC after a hardware change", "ok"],
+  rejected_device: ["Refused: already on another PC", "bad"],
+  rejected_expired: ["Refused: key expired", "warn"],
+  rejected_revoked: ["Refused: key revoked", "warn"],
+  revoked: ["Revoked", "warn"],
+  reactivated: ["Reactivated", "ok"],
+  device_reset: ["Device released", "accent"],
+  expiry_changed: ["Time changed", "accent"],
+  extended: ["Time added", "accent"],
+  deleted: ["Deleted", "bad"],
+  restored: ["Restored from a backup", "accent"],
+};
+
+function timelineHtml(events, withKey) {
+  return events.map((e) => {
+    const [text, tone] = EVENT_LABELS[e.event] || [e.event, ""];
+    const bits = [];
+    if (withKey) bits.push(`<a href="#" data-open="${esc(e.license_key)}" style="color:inherit" class="mono">${esc(e.license_key)}</a>`);
+    if (e.detail) bits.push(esc(e.detail));
+    if (e.hwid) bits.push(`PC ${esc(e.hwid.slice(0, 10))}&hellip;`);
+    if (e.ip) bits.push(esc(e.ip));
+    return `<div class="ev">
+      <span class="ev-dot ${tone}"></span>
+      <div><div class="ev-title">${esc(text)}</div>${bits.length ? `<div class="ev-meta">${bits.join(" &middot; ")}</div>` : ""}</div>
+      <span class="ev-time" title="${esc(fmtDateTime(e.created_at))}">${esc(relTime(e.created_at))}</span>
+    </div>`;
+  }).join("");
+}
+function renderTimeline(el, events, withKey) {
+  el.innerHTML = events.length ? timelineHtml(events, withKey) : `<div class="empty"><b>Nothing recorded yet</b></div>`;
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("a[data-open]");
+  if (!a) return;
+  e.preventDefault();
+  openDrawer(a.dataset.open);
+});
+
+// ---------- Activity ----------
+let activityType = "";
+let activityLastId = null;
+let activityTicket = 0;
+const ACTIVITY_PAGE = 50;
+
+async function loadActivity(fresh) {
+  const ticket = ++activityTicket;
+  const params = new URLSearchParams({ limit: String(ACTIVITY_PAGE) });
+  if (activityType) params.set("type", activityType);
+  if ($("activityKey").value.trim()) params.set("key", $("activityKey").value.trim());
+  if (!fresh && activityLastId) params.set("before", String(activityLastId));
+  const events = await api(`/admin/events?${params}`);
+  if (ticket !== activityTicket) return;
+  const list = $("activityList");
+  if (fresh) renderTimeline(list, events, true);
+  else list.insertAdjacentHTML("beforeend", timelineHtml(events, true));
+  activityLastId = events.length ? events[events.length - 1].id : activityLastId;
+  $("activityMore").classList.toggle("hidden", events.length < ACTIVITY_PAGE);
+  markUpdated();
+}
+$("activityType").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-type]");
+  if (!b) return;
+  activityType = b.dataset.type;
+  $("activityType").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+  loadActivity(true).catch(showError);
+});
+let activityDebounce = null;
+$("activityKey").addEventListener("input", () => {
+  clearTimeout(activityDebounce);
+  activityDebounce = setTimeout(() => loadActivity(true).catch(showError), 300);
+});
+$("activityMore").addEventListener("click", () => loadActivity(false).catch(showError));
+
+// ---------- Keys ----------
+let page = 0;
+let totalKeys = 0;
+let rowsByKey = new Map();
+let listTicket = 0;
+const selected = new Set();
+const pageSize = () => Number($("pageSize").value);
+
+function listParams() {
+  const params = new URLSearchParams();
+  if ($("statusFilter").value) params.set("status", $("statusFilter").value);
+  if ($("searchInput").value.trim()) params.set("q", $("searchInput").value.trim());
+  return params;
+}
+
+async function loadKeys() {
+  // Only the newest request paints, so a slow answer can't overwrite a newer view.
+  const ticket = ++listTicket;
+  const params = listParams();
+  params.set("limit", String(pageSize()));
+  params.set("offset", String(page * pageSize()));
+  params.set("sort", $("sortSelect").value);
+  const res = await checked(`/admin/licenses?${params}`);
+  const rows = await res.json();
+  if (ticket !== listTicket) return;
+  totalKeys = Number(res.headers.get("X-Total-Count")) || 0;
+  // A page that emptied (its last keys were deleted) steps back.
+  if (rows.length === 0 && page > 0) { page = Math.max(0, Math.ceil(totalKeys / pageSize()) - 1); return loadKeys(); }
+  rowsByKey = new Map(rows.map((r) => [r.license_key, r]));
+  $("rows").innerHTML = rows.map(rowHtml).join("");
+  const filtered = $("statusFilter").value || $("searchInput").value.trim();
+  $("emptyState").innerHTML = filtered ? "<b>Nothing matches</b>Clear the search or pick another filter." : "<b>No keys yet</b>Create some to get started.";
+  $("emptyState").classList.toggle("hidden", rows.length > 0);
+  const start = page * pageSize();
+  $("pageInfo").textContent = rows.length ? `${start + 1}–${start + rows.length} of ${totalKeys}` : "No keys";
+  $("prevPageBtn").disabled = page === 0;
+  $("nextPageBtn").disabled = start + rows.length >= totalKeys;
+  paintSelection();
+  markUpdated();
+}
+
+function rowHtml(row) {
+  const key = esc(row.license_key);
+  const st = statusOf(row);
+  const left = timeLeft(row);
+  const device = row.hwid ? `<span class="mono" title="${esc(row.hwid)}">${esc(row.hwid.slice(0, 8))}&hellip;</span>` : `<span class="faint">Not locked yet</span>`;
+  return `<tr data-key="${key}" class="${selected.has(row.license_key) ? "sel" : ""}">
+    <td data-stop><input type="checkbox" data-select="${key}" aria-label="Select ${key}" ${selected.has(row.license_key) ? "checked" : ""} /></td>
+    <td><span class="key" data-copy="${key}" title="Click to copy">${key}</span></td>
+    <td class="col-status"><span class="pill ${st.cls}">${st.text}</span></td>
+    <td class="col-time ${left.cls}" title="${esc(left.title)}">${esc(left.text)}</td>
+    <td class="col-device">${device}</td>
+    <td class="col-seen" title="${esc(row.last_seen_ip || "")}">${esc(relTime(row.last_seen_at))}</td>
+    <td class="col-manage" style="text-align:right"><button type="button" class="btn small">Manage</button></td>
+  </tr>`;
+}
+
+$("rows").addEventListener("click", (e) => {
+  const copyEl = e.target.closest("[data-copy]");
+  if (copyEl) return copy(copyEl.dataset.copy, "Key copied.");
+  if (e.target.closest("[data-stop]")) return;
+  const tr = e.target.closest("tr[data-key]");
+  if (tr) openDrawer(tr.dataset.key);
+});
+$("rows").addEventListener("change", (e) => {
+  const box = e.target.closest("[data-select]");
+  if (!box) return;
+  if (box.checked) selected.add(box.dataset.select); else selected.delete(box.dataset.select);
+  box.closest("tr").classList.toggle("sel", box.checked);
+  paintSelection();
+});
+
+function paintSelection() {
+  const onPage = [...rowsByKey.keys()];
+  const picked = onPage.filter((k) => selected.has(k)).length;
+  $("selectAll").checked = onPage.length > 0 && picked === onPage.length;
+  $("selectAll").indeterminate = picked > 0 && picked < onPage.length;
+  $("bulkCount").textContent = String(selected.size);
+  $("bulkBar").classList.toggle("hidden", selected.size === 0);
+}
+$("selectAll").addEventListener("change", () => {
+  for (const k of rowsByKey.keys()) {
+    if ($("selectAll").checked) selected.add(k); else selected.delete(k);
   }
+  $("rows").querySelectorAll("[data-select]").forEach((b) => {
+    b.checked = selected.has(b.dataset.select);
+    b.closest("tr").classList.toggle("sel", b.checked);
+  });
+  paintSelection();
 });
 
-// ---------- Change-expiry modal ----------
-const expiryModal = document.getElementById("expiryModal");
-const expiryModalSub = document.getElementById("expiryModalSub");
-let expiryModalKey = null;
-const expiryPicker = buildPicker({
-  chipsEl: document.getElementById("expiryChips"),
-  dateEl: document.getElementById("expiryExactDate"),
-  previewEl: document.getElementById("expiryPreview"),
+const reloadFromFirst = () => { page = 0; selected.clear(); loadKeys().catch(showError); };
+$("statusFilter").addEventListener("change", reloadFromFirst);
+$("sortSelect").addEventListener("change", reloadFromFirst);
+$("pageSize").addEventListener("change", reloadFromFirst);
+let searchDebounce = null;
+$("searchInput").addEventListener("input", () => {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(reloadFromFirst, 300);
 });
+$("prevPageBtn").addEventListener("click", () => { if (page > 0) { page--; loadKeys().catch(showError); } });
+$("nextPageBtn").addEventListener("click", () => { page++; loadKeys().catch(showError); });
 
-function openExpiryModal(key) {
-  expiryModalKey = key;
-  expiryModalSub.textContent = key;
-  expiryPicker.reset(0);
-  expiryModal.classList.remove("hidden");
-}
-function closeExpiryModal() {
-  expiryModal.classList.add("hidden");
-  expiryModalKey = null;
-}
-
-document.getElementById("expiryCancel").addEventListener("click", closeExpiryModal);
-expiryModal.addEventListener("click", (e) => { if (e.target === expiryModal) closeExpiryModal(); });
-
-document.getElementById("expirySave").addEventListener("click", async (e) => {
-  if (!expiryModalKey) return;
+$("exportBtn").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
   try {
-    const result = await api(`/admin/licenses/${encodeURIComponent(expiryModalKey)}/expiry`, {
-      method: "POST",
-      body: JSON.stringify(expiryPicker.payload()),
-    });
-    toast(result.expires_at ? `Expiry set to ${fmtDate(result.expires_at)}.` : "Expiry removed.");
-    closeExpiryModal();
-    refreshStats().catch(() => {});
-    loadPage(currentPage);
+    const res = await checked(`/admin/export.csv?${listParams()}`);
+    download(await res.blob(), `licenses-${today()}.csv`);
+    toast("Export downloaded.");
   } catch (err) {
-    if (err.message !== "unauthorized") toast(err.message, "err");
+    showError(err);
   } finally {
     btn.disabled = false;
   }
 });
 
-document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape") return;
-  if (openMenuEl) closeRowMenu();
-  else if (!historyModal.classList.contains("hidden")) closeHistory();
-  else if (!expiryModal.classList.contains("hidden")) closeExpiryModal();
-  else if (!newKeyModal.classList.contains("hidden")) closeNewKeyModal();
+// ---------- Confirm ----------
+let confirmResolve = null;
+function confirmBox(title, lead, yesLabel, danger = true) {
+  $("confirmTitle").textContent = title;
+  $("confirmLead").textContent = lead;
+  $("confirmYes").textContent = yesLabel;
+  $("confirmYes").className = `btn ${danger ? "danger" : "primary"}`;
+  $("confirmModal").classList.remove("hidden");
+  $("confirmNo").focus();
+  return new Promise((resolve) => { confirmResolve = resolve; });
+}
+function closeConfirm(answer) {
+  $("confirmModal").classList.add("hidden");
+  if (confirmResolve) { confirmResolve(answer); confirmResolve = null; }
+}
+$("confirmYes").addEventListener("click", () => closeConfirm(true));
+$("confirmNo").addEventListener("click", () => closeConfirm(false));
+
+// ---------- Bulk ----------
+const afterChange = () => { refreshView()?.catch?.(showError); if (drawerKey) renderDrawer(drawerKey).catch(() => {}); };
+
+async function runBulk(body, doneText) {
+  const keys = [...selected];
+  const r = await post("/admin/licenses/bulk", { ...body, keys });
+  const skipped = r.requested - r.changed;
+  toast(`${doneText(r.changed)}${skipped ? ` ${skipped} didn't need it.` : ""}`);
+  if (body.action === "delete") selected.clear();
+  afterChange();
+}
+
+$("bulkBar").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-bulk]");
+  if (!btn) return;
+  const what = btn.dataset.bulk;
+  const n = selected.size;
+  const label = plural(n, "key");
+  try {
+    if (what === "clear") { selected.clear(); loadKeys().catch(showError); return; }
+    if (what === "copy") return copy([...selected].join("\n"), `${label} copied.`);
+    if (what === "extend") return openTimeModal({ kind: "add", keys: [...selected] });
+    if (what === "set") return openTimeModal({ kind: "set", keys: [...selected] });
+    if (what === "revoke") {
+      if (!(await confirmBox(`Revoke ${label}?`, "They stop working at their next check, within 5 minutes.", "Revoke"))) return;
+      return await runBulk({ action: "revoke" }, (c) => `${plural(c, "key")} revoked.`);
+    }
+    if (what === "reactivate") return await runBulk({ action: "reactivate" }, (c) => `${plural(c, "key")} reactivated.`);
+    if (what === "reset-hwid") {
+      if (!(await confirmBox(`Reset the device on ${label}?`, "Each one can then activate on a new PC.", "Reset device"))) return;
+      return await runBulk({ action: "reset-hwid" }, (c) => `${plural(c, "device")} reset.`);
+    }
+    if (what === "delete") {
+      if (!(await confirmBox(`Delete ${label}?`, "They stop working for good. Their history is kept.", "Delete"))) return;
+      return await runBulk({ action: "delete" }, (c) => `${plural(c, "key")} deleted.`);
+    }
+  } catch (err) {
+    showError(err);
+  }
 });
+
+// ---------- Set a duration / add time ----------
+const timeHost = $("timePicker");
+let timeTarget = null;
+let timePicker = null;
+
+function openTimeModal(target) {
+  timeTarget = target;
+  const who = target.keys.length === 1 ? target.keys[0] : plural(target.keys.length, "key");
+  if (target.kind === "add") {
+    $("timeTitle").textContent = "Add time";
+    $("timeLead").textContent = `${who}. Adds to what's left, or to today if it has run out. Lifetime keys stay lifetime.`;
+    timePicker = buildPicker(timeHost, { mode: "add" });
+  } else {
+    $("timeTitle").textContent = "Set duration";
+    $("timeLead").textContent = `${who}. Replaces the current time.`;
+    timePicker = buildPicker(timeHost, { mode: "set", defaultStart: "now" });
+  }
+  $("timeModal").classList.remove("hidden");
+}
+$("timeCancel").addEventListener("click", () => $("timeModal").classList.add("hidden"));
+$("timeSave").addEventListener("click", async (e) => {
+  const value = timePicker.value();
+  if (!value) return toast("Pick 1 to 3650 days.", "err");
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  const { kind, keys } = timeTarget;
+  try {
+    if (kind === "add") {
+      if (keys.length === 1) {
+        await post(`${keyPath(keys[0])}/extend`, value);
+        toast(`${plural(value.days, "day")} added.`);
+      } else {
+        const r = await post("/admin/licenses/bulk", { action: "extend", days: value.days, keys });
+        toast(`${plural(value.days, "day")} added to ${plural(r.changed, "key")}.${r.requested - r.changed ? ` ${r.requested - r.changed} are lifetime.` : ""}`);
+      }
+    } else if (keys.length === 1) {
+      await post(`${keyPath(keys[0])}/expiry`, value);
+      toast("Duration set.");
+    } else {
+      const r = await post("/admin/licenses/bulk", { action: "set-duration", ...value, keys });
+      toast(`Duration set on ${plural(r.changed, "key")}.`);
+    }
+    $("timeModal").classList.add("hidden");
+    afterChange();
+  } catch (err) {
+    showError(err);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---------- Key details ----------
+let drawerKey = null;
+let drawerTicket = 0;
+
+async function openDrawer(key) {
+  drawerKey = key;
+  $("drawerKey").textContent = key;
+  $("drawerBody").innerHTML = `<div class="empty">Loading&hellip;</div>`;
+  $("drawer").classList.remove("hidden");
+  try {
+    await renderDrawer(key);
+  } catch (e) {
+    $("drawerBody").innerHTML = `<div class="empty"><b>${esc(e.message)}</b></div>`;
+    showError(e);
+  }
+}
+function closeDrawer() {
+  drawerKey = null;
+  $("drawer").classList.add("hidden");
+}
+$("drawerClose").addEventListener("click", closeDrawer);
+$("drawerKey").addEventListener("click", () => copy($("drawerKey").textContent, "Key copied."));
+
+async function renderDrawer(key) {
+  const ticket = ++drawerTicket;
+  const [row, events] = await Promise.all([api(keyPath(key)), api(`${keyPath(key)}/events?limit=100`)]);
+  if (ticket !== drawerTicket || drawerKey !== key) return;
+  const st = statusOf(row);
+  const left = timeLeft(row);
+  const lifetime = !row.expires_at && !row.duration_days;
+  const fact = (k, v) => `<div><span class="k">${esc(k)}</span><span class="val">${v}</span></div>`;
+  $("drawerBody").innerHTML = `
+    <span class="pill ${st.cls}">${st.text}</span>
+    <div class="facts">
+      ${fact("Time left", `<span class="${left.cls}">${esc(left.text)}</span>`)}
+      ${fact("Expires", row.expires_at ? esc(fmtDateTime(row.expires_at)) : "—")}
+      ${fact("Created", esc(fmtDateTime(row.created_at)))}
+      ${fact("First activated", esc(fmtDateTime(row.first_activated_at)))}
+      ${fact("Last seen", esc(relTime(row.last_seen_at)))}
+      ${fact("Last address", esc(row.last_seen_ip || "—"))}
+      ${fact("Locked to", row.hwid ? `<span class="mono">${esc(row.hwid)}</span>` : "Not locked yet")}
+      ${fact("Device resets", esc(row.device_resets))}
+      ${fact("Wrong-device tries", `<span class="${row.wrong_device_tries ? "t-gone" : ""}">${esc(row.wrong_device_tries)}</span>`)}
+      ${fact("PCs seen", esc(row.devices_seen))}
+    </div>
+    <div class="section-title">Time</div>
+    <div class="action-row">
+      ${lifetime ? "" : QUICK_DAYS.map((d) => `<button type="button" class="btn small" data-add="${d}">+${d}d</button>`).join("")}
+      ${lifetime ? "" : `<button type="button" class="btn small" data-act="add">+ Custom</button>`}
+      <button type="button" class="btn small" data-act="set">Set duration</button>
+    </div>
+    <div class="section-title">Key</div>
+    <div class="action-row">
+      ${row.status === "revoked"
+        ? `<button type="button" class="btn small" data-act="unrevoke">Reactivate</button>`
+        : `<button type="button" class="btn small" data-act="revoke">Revoke</button>`}
+      ${row.hwid ? `<button type="button" class="btn small" data-act="reset">Reset device</button>` : ""}
+      <button type="button" class="btn small danger" data-act="delete">Delete</button>
+    </div>
+    <div class="section-title">History</div>
+    <div id="drawerHistory">${events.length ? timelineHtml(events, false) : `<div class="empty"><b>Nothing recorded yet</b></div>`}</div>`;
+}
+
+$("drawerBody").addEventListener("click", async (e) => {
+  const key = drawerKey;
+  const btn = e.target.closest("button");
+  if (!key || !btn) return;
+  const reload = () => afterChange();
+  btn.disabled = true;
+  try {
+    if (btn.dataset.add) {
+      await post(`${keyPath(key)}/extend`, { days: Number(btn.dataset.add) });
+      toast(`+${btn.dataset.add} days added.`);
+      return reload();
+    }
+    const act = btn.dataset.act;
+    if (act === "add") return openTimeModal({ kind: "add", keys: [key] });
+    if (act === "set") return openTimeModal({ kind: "set", keys: [key] });
+    if (act === "revoke") {
+      await post(`${keyPath(key)}/revoke`);
+      toast("Key revoked.", "ok", async () => {
+        try { await post(`${keyPath(key)}/unrevoke`); toast("Key reactivated."); afterChange(); } catch (err) { showError(err); }
+      });
+      return reload();
+    }
+    if (act === "unrevoke") {
+      await post(`${keyPath(key)}/unrevoke`);
+      toast("Key reactivated.");
+      return reload();
+    }
+    if (act === "reset") {
+      if (!(await confirmBox("Reset this device?", `${key} can then activate on a new PC.`, "Reset device"))) return;
+      await post(`${keyPath(key)}/reset-hwid`);
+      toast("Device reset.");
+      return reload();
+    }
+    if (act === "delete") {
+      if (!(await confirmBox("Delete this key?", `${key} stops working for good. Its history is kept.`, "Delete"))) return;
+      await api(keyPath(key), { method: "DELETE" });
+      toast("Key deleted.");
+      selected.delete(key);
+      closeDrawer();
+      return reload();
+    }
+  } catch (err) {
+    showError(err);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---------- Create keys ----------
+const newKeyPicker = buildPicker($("newKeyPicker"), { mode: "set", defaultStart: "activation" });
+
+function openNewKeys() {
+  $("newKeyResult").innerHTML = "";
+  $("newKeyCount").value = "1";
+  newKeyPicker.reset();
+  $("newKeyModal").classList.remove("hidden");
+}
+function closeNewKeys() {
+  $("newKeyModal").classList.add("hidden");
+  refreshView()?.catch?.(showError);
+}
+$("newKeyBtn").addEventListener("click", openNewKeys);
+$("newKeyClose").addEventListener("click", closeNewKeys);
+
+$("newKeyCreate").addEventListener("click", async (e) => {
+  const count = Number($("newKeyCount").value);
+  if (!Number.isInteger(count) || count < 1 || count > 100) return toast("Pick 1 to 100 keys.", "err");
+  const time = newKeyPicker.value();
+  if (!time) return toast("Pick 1 to 3650 days.", "err");
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const result = await post("/admin/licenses", { ...time, count });
+    const made = result.created;
+    const text = `${made.map((k) => k.license_key).join("\n")}\n`;
+    const first = made[0];
+    const about = first.expires_at ? `Expires ${fmtDate(first.expires_at)}` : first.duration_days ? `${first.duration_days} days from first activation` : "Lifetime";
+    $("newKeyResult").innerHTML = `<div class="result">
+      <div class="dim" style="font-size:12.5px">${esc(plural(made.length, "key"))} &middot; ${esc(about)}</div>
+      <div class="result-list">${made.map((k) => `<span class="key" data-copy="${esc(k.license_key)}" title="Click to copy">${esc(k.license_key)}</span>`).join("")}</div>
+      <div class="action-row">
+        <button type="button" class="btn small" id="copyAllKeys">Copy all</button>
+        <button type="button" class="btn small" id="downloadKeys">Download .txt</button>
+      </div>
+    </div>`;
+    $("copyAllKeys").addEventListener("click", () => copy(text, `${plural(made.length, "key")} copied.`));
+    $("downloadKeys").addEventListener("click", () => download(new Blob([text], { type: "text/plain" }), `keys-${today()}.txt`));
+    toast(`${plural(made.length, "key")} created.`);
+  } catch (err) {
+    showError(err);
+  } finally {
+    btn.disabled = false;
+  }
+});
+$("newKeyResult").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-copy]");
+  if (c) copy(c.dataset.copy, "Key copied.");
+});
+
+// ---------- Backup & system ----------
+$("backupBtn").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const res = await checked("/admin/backup.json");
+    download(await res.blob(), `afkstrike-licenses-${today()}.json`);
+    toast("Backup downloaded. Keep it somewhere private: it holds every key.");
+  } catch (err) {
+    showError(err);
+  } finally {
+    btn.disabled = false;
+  }
+});
+$("restoreBtn").addEventListener("click", () => $("restoreFile").click());
+$("restoreFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    let parsed;
+    try { parsed = JSON.parse(await file.text()); } catch { throw new Error("That isn't an AfkStrike backup file."); }
+    const n = Array.isArray(parsed.licenses) ? parsed.licenses.length : 0;
+    if (!(await confirmBox("Restore from this file?", `It holds ${plural(n, "key")}. Only missing keys are added.`, "Restore", false))) return;
+    const r = await post("/admin/restore", parsed);
+    toast(`${plural(r.added, "key")} added. ${r.already_here} already here${r.invalid ? `, ${r.invalid} unreadable` : ""}.`);
+    loadSystem().catch(() => {});
+  } catch (err) {
+    showError(err);
+  }
+});
+
+async function loadSystem() {
+  const s = await api("/admin/system");
+  const up = s.uptime_seconds >= 3600 ? `${Math.floor(s.uptime_seconds / 3600)}h ${Math.floor((s.uptime_seconds % 3600) / 60)}m` : `${Math.floor(s.uptime_seconds / 60)}m`;
+  const item = (k, v) => `<div><span class="k">${esc(k)}</span><span class="val">${esc(v)}</span></div>`;
+  $("system").innerHTML =
+    item("Database", `Answering in ${s.database_ms} ms`) +
+    item("Database size", `${(s.database_bytes / 1048576).toFixed(1)} MB`) +
+    item("Keys", s.licenses) +
+    item("History entries", `${s.events} (kept ${s.event_retention_days} days)`) +
+    item("Running for", up) +
+    item("Deployed version", s.commit || "local") +
+    item("Node", s.node) +
+    `<div style="grid-column:1/-1"><span class="k">Signing public key (must match the app)</span><span class="val mono" style="font-size:12px">${esc(s.signing_public_key)}</span></div>`;
+  markUpdated();
+}
+$("systemRefresh").addEventListener("click", () => loadSystem().catch(showError));
+
+// ---------- Refresh ----------
+let lastUpdated = 0;
+function markUpdated() { lastUpdated = Date.now(); paintUpdated(); }
+function paintUpdated() {
+  if (!lastUpdated) { $("updatedAgo").textContent = ""; return; }
+  const s = Math.round((Date.now() - lastUpdated) / 1000);
+  $("updatedAgo").textContent = s < 5 ? "Updated just now" : s < 60 ? `Updated ${s}s ago` : `Updated ${Math.floor(s / 60)}m ago`;
+}
+setInterval(paintUpdated, 5000);
+
+const anyOverlayOpen = () => !!document.querySelector(".overlay:not(.hidden)");
+// Every 30 s, but never while something is being picked, typed or read.
+setInterval(() => {
+  if (document.hidden || $("app").classList.contains("hidden") || anyOverlayOpen() || selected.size > 0) return;
+  if (document.activeElement && ["INPUT", "SELECT"].includes(document.activeElement.tagName)) return;
+  if (currentView === "activity" || currentView === "tools") return;
+  refreshView()?.catch?.(() => {});
+}, 30000);
+$("refreshBtn").addEventListener("click", () => refreshView()?.catch?.(showError));
+
+// Keyboard: not while typing.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (!$("confirmModal").classList.contains("hidden")) return closeConfirm(false);
+    if (!$("timeModal").classList.contains("hidden")) return $("timeModal").classList.add("hidden");
+    if (!$("newKeyModal").classList.contains("hidden")) return closeNewKeys();
+    if (drawerKey) return closeDrawer();
+    return;
+  }
+  if ($("app").classList.contains("hidden") || e.ctrlKey || e.metaKey || e.altKey || anyOverlayOpen()) return;
+  const t = e.target;
+  if (t && ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)) return;
+  if (e.key === "/") { e.preventDefault(); showView("keys"); $("searchInput").focus(); }
+  else if (e.key === "n" || e.key === "N") { e.preventDefault(); openNewKeys(); }
+  else if (e.key === "r" || e.key === "R") { e.preventDefault(); refreshView()?.catch?.(showError); }
+});
+// A click on the dimmed background closes a modal.
+document.querySelectorAll(".overlay").forEach((o) => o.addEventListener("click", (e) => {
+  if (e.target !== o) return;
+  if (o.id === "confirmModal") closeConfirm(false);
+  else if (o.id === "newKeyModal") closeNewKeys();
+  else o.classList.add("hidden");
+}));
+
+// ---------- Sign-in ----------
+const secretInput = $("gateSecretInput");
+$("gateHost").textContent = location.host;
+
+function setGateBusy(busy, label) {
+  $("gateSubmit").disabled = busy;
+  secretInput.disabled = busy;
+  $("gateSubmit").textContent = busy ? (label || "Checking…") : "Sign in";
+}
+function showGate(error) {
+  clearSecret();
+  closeDrawer();
+  setGateBusy(false);
+  $("gate").classList.remove("hidden");
+  $("app").classList.add("hidden");
+  $("gateError").textContent = error || "";
+  secretInput.value = "";
+  secretInput.focus();
+}
+async function signIn(secret, remember) {
+  setGateBusy(true);
+  // The free plan sleeps; say so rather than look frozen.
+  const slow = setTimeout(() => setGateBusy(true, "Waking the server up…"), 3000);
+  setSecret(secret, remember);
+  try {
+    await checked("/admin/stats");
+  } catch (e) {
+    clearTimeout(slow);
+    if (e.message === "unauthorized") return;
+    clearSecret();
+    setGateBusy(false);
+    $("gateError").textContent = e.message;
+    secretInput.value = secret;
+    secretInput.focus();
+    return;
+  }
+  clearTimeout(slow);
+  setGateBusy(false);
+  $("gate").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  showView(location.hash.slice(1));
+}
+$("gateForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const value = secretInput.value.trim();
+  if (!value) { $("gateError").textContent = "Paste the admin secret first."; secretInput.focus(); return; }
+  $("gateError").textContent = "";
+  signIn(value, $("gateRemember").checked);
+});
+$("gateEye").addEventListener("click", () => {
+  const show = secretInput.type === "password";
+  secretInput.type = show ? "text" : "password";
+  $("gateEye").setAttribute("aria-pressed", String(show));
+  $("gateEye").title = show ? "Hide the secret" : "Show the secret";
+  secretInput.focus();
+});
+$("lockBtn").addEventListener("click", () => showGate());
+
+// ---------- Sparks ----------
+// Moved from here rather than by CSS, so they run with Windows' "Show
+// animations" off as well, as in the desktop app. Rests in a hidden tab.
+(function sparks() {
+  const box = $("sparks");
+  const list = Array.from({ length: 24 }, (_, i) => {
+    const node = document.createElement("span");
+    node.className = `spark${i % 6 === 0 ? " teal" : ""}`;
+    const size = (2 + Math.random() * 3).toFixed(1);
+    node.style.cssText = `left:${(Math.random() * 100).toFixed(1)}%;width:${size}px;height:${size}px;opacity:${(0.3 + Math.random() * 0.6).toFixed(2)}`;
+    box.appendChild(node);
+    return { node, rise: 20 + Math.random() * 25, at: Math.random() };
+  });
+  let last = performance.now();
+  setInterval(() => {
+    const now = performance.now();
+    const dt = Math.min(0.25, (now - last) / 1000);
+    last = now;
+    if (document.hidden) return;
+    const height = window.innerHeight + 60;
+    for (const s of list) {
+      s.at = (s.at + dt / s.rise) % 1;
+      s.node.style.transform = `translateY(${(20 - s.at * height).toFixed(1)}px)`;
+    }
+  }, 50);
+})();
 
 // ---------- Boot ----------
 (function boot() {
   const saved = getSecret();
   if (saved) {
-    // Signing straight back in: the form stays up, busy, so a slow
-    // (sleeping) server shows "Waking the server up" rather than a blank page.
-    gateEl.classList.remove("hidden");
-    try { document.getElementById("gateRemember").checked = !!localStorage.getItem(SECRET_KEY); } catch { /* ignore */ }
-    tryUnlock(saved, document.getElementById("gateRemember").checked);
+    try { $("gateRemember").checked = !!localStorage.getItem(SECRET_KEY); } catch { /* ignore */ }
+    signIn(saved, $("gateRemember").checked);
   } else {
     showGate();
   }
 })();
-
-// ---------- Ambient light, particles and card lighting ----------
-// Same effect as the desktop app. Only transform and opacity animate.
-(function ambient() {
-  const box = document.getElementById("ambientParticles");
-  if (box) {
-    for (let i = 0; i < 24; i++) {
-      const p = document.createElement("span");
-      p.className = "ambient-particle" + (i % 6 === 0 ? " is-teal" : "");
-      const size = (1.8 + Math.random() * 2.8).toFixed(1);
-      const rise = (10 + Math.random() * 14).toFixed(1);
-      p.style.cssText =
-        `left:${(Math.random() * 100).toFixed(1)}%;top:${(Math.random() * 100).toFixed(1)}%;` +
-        `width:${size}px;height:${size}px;animation-duration:${rise}s;` +
-        `animation-delay:-${(Math.random() * rise).toFixed(1)}s`;
-      box.appendChild(p);
-    }
-  }
-  // Sparks inside the sign-in card and the overview card.
-  const spots = [[12, 18], [48, 8], [90, 16], [66, 82], [28, 88], [94, 60], [6, 62]];
-  for (const card of document.querySelectorAll(".gate-card, .overview")) {
-    spots.forEach(([x, y], i) => {
-      const sp = document.createElement("span");
-      sp.className = "card-spark";
-      sp.setAttribute("aria-hidden", "true");
-      sp.style.cssText = `left:${x}%;top:${y}%;animation-delay:${(i * 0.55).toFixed(2)}s`;
-      card.appendChild(sp);
-    });
-  }
-  // A soft light on the card under the pointer.
-  const LIT = ".overview, .chart-card, .table-wrap, .feed, .tile, .gate-card";
-  document.querySelectorAll(LIT).forEach((c) => c.classList.add("lit"));
-  let pending = null;
-  document.addEventListener("pointermove", (ev) => {
-    if (pending) return;
-    pending = requestAnimationFrame(() => {
-      pending = null;
-      const card = ev.target instanceof Element ? ev.target.closest(LIT) : null;
-      if (!card) return;
-      const r = card.getBoundingClientRect();
-      card.style.setProperty("--mx", `${Math.round(ev.clientX - r.left)}px`);
-      card.style.setProperty("--my", `${Math.round(ev.clientY - r.top)}px`);
-    });
-  }, { passive: true });
-})();
-
-// The effects rest whenever the window isn't in front.
-function syncEffectsPause() {
-  document.body.classList.toggle("fx-paused", document.hidden || !document.hasFocus());
-}
-document.addEventListener("visibilitychange", syncEffectsPause);
-window.addEventListener("blur", syncEffectsPause);
-window.addEventListener("focus", syncEffectsPause);
-syncEffectsPause();
 </script>
 </body>
 </html>
