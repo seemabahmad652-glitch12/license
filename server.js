@@ -623,7 +623,7 @@ app.use(
 // signed installer(s) it points to) into this folder - no server
 // code changes, no restart needed, same deploy as the licensing API.
 // release.cmd (in the app project) writes the manifest and installers;
-// see the app's CLAUDE.md "Updates" section for how it all fits together.
+// see the app project's UPDATING.md for how it all fits together.
 app.use(
   "/updates",
   express.static(path.join(__dirname, "updates"), {
